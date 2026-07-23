@@ -99,8 +99,11 @@ verify previous numbered items were addressed and re-review only the diff.
   enables parallel runs.
 - **Append-only log.md**: single file to read when a run stalls at 3am; also
   data for tuning the rubric after a few runs.
-- **Worktree per run**: two runs sharing one checkout is the first incident
-  you'll have otherwise.
+- **Worktree per RUN, not per agent**: two runs sharing one checkout is an
+  incident waiting to happen, but two agents in separate worktrees is worse.
+  Git worktrees are separate directories, so split agents cannot see each
+  other's artifacts and the handshake stalls with no error. One worktree per
+  run, both agents inside it, one terminal each.
 - **Poll budget**: polling loops fail expensive, not loud. A stalled run that
   exits after 20 polls costs cents.
 

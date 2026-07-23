@@ -64,11 +64,18 @@ The protocol is identical in all cases; only the source of truth changes.
    contain `{{WORK_ITEM_BLOCK}}` / `{{RUBRIC_ITEM_1}}` slots whose content
    depends on the work item type — both variants are given inline in each
    template; pick the matching one and delete the other.
-3. Output both prompts in separate fenced code blocks, planner first, each
+3. Write both prompts to the run folder as `planner.txt` and `reviewer.txt`.
+   This keeps the exact prompt text next to `log.md` and the artifacts it
+   produced, so a run is reproducible and a stall is diagnosable later.
+4. Output both prompts in separate fenced code blocks, planner first, each
    ready to paste into its agent. Label clearly which MODEL gets which prompt
    (e.g. "→ paste into the Sol agent"), since roles are swappable and mixing
    them up is the easiest way to break the run.
-4. After the prompts, remind the user of the two operational checks (below).
+5. If the user runs Orca ADE, also fill `assets/launch.sh` and write it to the
+   run folder so the whole duo starts with one command. See
+   `references/orca.md` for the CLI specifics and the ordering constraint.
+   For other IDEs, skip the launcher and let them paste manually.
+6. After the prompts, remind the user of the two operational checks (below).
 
 ## Invariants — never violate these when customizing
 
@@ -85,8 +92,11 @@ The protocol is identical in all cases; only the source of truth changes.
 - **Plans are versioned, never edited in place.** `plan-v1.md`, `plan-v2.md`, ...
 - **Status lives in frontmatter**, not prose. Exact tokens: `approved`,
   `changes_requested`. PR sign-off is a PR comment containing exactly `PR APPROVED`.
-- **Run isolation.** All artifacts carry `run_id`; agents ignore files from other
-  runs. Each run gets its own folder and its own git worktree.
+- **Run isolation, NOT agent isolation.** All artifacts carry `run_id`; agents
+  ignore files from other runs. Each run gets its own folder and ONE git worktree
+  shared by both agents. Never give each agent its own worktree: git worktrees are
+  separate directories, so the file handshake would break and the run would stall
+  silently with no error.
 - **Circuit breaker.** Both agents: 20 empty polls → write STALL to log.md → exit.
 - **Re-review only what changed** between rounds (both sides).
 - **Reviewer never blocks on style.** Style/naming/optional improvements go in
@@ -96,7 +106,8 @@ The protocol is identical in all cases; only the source of truth changes.
 
 1. **Dry-run the handshake first** on a throwaway work item. The weak link is
    whether the IDE's polling actually wakes each agent on file changes. Watch
-   `log.md` from both sides during the dry run.
+   `log.md` from both sides during the dry run. If using the Orca launcher,
+   also verify the jq field paths against real `--json` output on this run.
 2. **The gate placeholder must be real commands** before a production run —
    the planner will treat whatever is there as the ship condition.
 
