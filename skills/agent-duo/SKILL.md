@@ -32,7 +32,11 @@ Collect these before generating. If any are missing, ask once, concisely:
    short kebab slug of the work item + `-a` (e.g. `email-dedup-a`).
    Increment the letter for retries.
 4. **Runs folder root** — default: `docs/superpowers/runs/`
-5. **Deterministic gate command(s)** — the test/lint/build commands that must
+5. **Transport mode** - `file` (default, portable) or `orchestration`
+   (Orca-native). Ask only if the user mentions Orca or orchestration;
+   otherwise default to `file` and mention orchestration exists.
+   See "Transport modes" below.
+6. **Deterministic gate command(s)** — the test/lint/build commands that must
    pass before a PR opens. If unspecified, insert a placeholder
    `<GATE: tests + lint + build commands here>` and tell the user to fill it in.
 
@@ -52,14 +56,36 @@ The protocol is identical in all cases; only the source of truth changes.
   them. A brainstorm transcript or its conclusions pasted as the work item is
   a normal brief run.
 
+## Transport modes
+
+Same protocol, same artifacts, different signaling. The artifacts (spec, plan,
+cr files, frontmatter, rubrics, spec freeze, round caps) are IDENTICAL in both
+modes. Only how agents notice each other's work changes.
+
+- **file** (default): agents poll the run folder; circuit breaker at 20 empty
+  polls. Works in any IDE, trivial to debug by reading a folder.
+- **orchestration** (Orca only, experimental): coordinator/worker dispatches and
+  blocking waits. No polling, no wasted tokens, and timeouts are checkpoints
+  rather than guesses. Read `references/orchestration.md` and use the
+  `-orca` prompt templates.
+
+For orchestration mode the planner is the COORDINATOR (owns round caps, tasks,
+escalation) and the reviewer is a WORKER terminal. That is the same ownership
+split as file mode, expressed in Orca's model.
+
 ## How to generate
 
 1. Read `references/protocol.md` for the full artifact protocol (frontmatter
    schema, filenames, status tokens, ownership rules). Follow it exactly —
    both prompts must agree on every filename and token or the handshake stalls.
 2. Fill the two templates in `assets/`:
+   File mode:
    - `assets/planner-prompt.md` → the `/loop` prompt for the planner/executor agent
    - `assets/reviewer-prompt.md` → the `/goal` prompt for the reviewer agent
+   Orchestration mode:
+   - `assets/planner-prompt-orca.md` and `assets/reviewer-prompt-orca.md`
+     Leave `{{REVIEWER_HANDLE}}` / `{{PLANNER_HANDLE}}` unsubstituted: terminal
+     handles are runtime-scoped and the launcher resolves them at start.
    Replace every `{{PLACEHOLDER}}` with the collected values. The templates
    contain `{{WORK_ITEM_BLOCK}}` / `{{RUBRIC_ITEM_1}}` slots whose content
    depends on the work item type — both variants are given inline in each
@@ -71,9 +97,9 @@ The protocol is identical in all cases; only the source of truth changes.
    ready to paste into its agent. Label clearly which MODEL gets which prompt
    (e.g. "→ paste into the Sol agent"), since roles are swappable and mixing
    them up is the easiest way to break the run.
-5. If the user runs Orca ADE, also fill `assets/launch.sh` and write it to the
-   run folder so the whole duo starts with one command. See
-   `references/orca.md` for the CLI specifics and the ordering constraint.
+5. If the user runs Orca ADE, also fill the launcher and write it to the run
+   folder so the duo starts with one command: `assets/launch.sh` for file mode,
+   `assets/launch-orca.sh` for orchestration mode. See `references/orca.md`.
    For other IDEs, skip the launcher and let them paste manually.
 6. After the prompts, remind the user of the two operational checks (below).
 
@@ -119,6 +145,8 @@ The protocol is identical in all cases; only the source of truth changes.
 - Parallel runs → one run_id + folder + worktree per work item; nothing else changes.
 - Human-in-the-loop checkpoint before execution → add to the planner: after
   approval, write `ready.md` and wait for the human to edit it with `go`.
+- Switch transport mid-project → regenerate prompts in the other mode; artifacts
+  and any in-flight run folder stay valid, since only signaling differs.
 - Skip the spec phase (trivial bugfix) → remove Phase 1 from the planner and
   the spec rubric from the reviewer; the issue serves as the spec.
 - No PR at all (spike/prototype) → drop Phase 4 from the planner and the PR
