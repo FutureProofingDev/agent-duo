@@ -125,3 +125,27 @@ Roles are defined entirely by which prompt a model receives. Any decorrelated
 pair works in either direction (Opus plans + Sol reviews, Sol plans + Opus
 reviews). When generating, label each prompt with the target MODEL explicitly;
 pasting them into the wrong agents is the most common setup error.
+
+
+## Field findings (first live run, 2026-07-23)
+
+Fixes below came from an end-to-end orchestration-mode run. Keep them.
+
+1. **Task spec strings are load-bearing.** The coordinator wrote each dispatch
+   spec freehand. The two that spelled out the reporting contract produced
+   correctly tagged completions; the shorter third one did not, and its task
+   stayed `dispatched` forever. Use a fixed template for every dispatch,
+   including the PR phase.
+2. **A missing taskId/dispatchId fails silently.** The coordinator still gets the
+   worker_done and the run proceeds, so the only symptom is an open task in
+   `task-list`. Verify task closure after each round rather than trusting the
+   message.
+3. **Reviewers drift off the output contract before they drift off the rubric.**
+   Three reviews in a row skipped the five numbered sections and returned short
+   prose instead, while still citing real specifics. Require the numbered
+   sections explicitly and treat their absence as an incomplete review.
+4. **One shared log.md interleaves.** Both agents appending produced entries out
+   of chronological order. Give each agent its own log file.
+5. **The PR step is not zero-touch.** The planner blocked on an interactive
+   git push / PR creation confirmation. Budget for a human gate there, or
+   pre-authorize the push in the agent's environment.

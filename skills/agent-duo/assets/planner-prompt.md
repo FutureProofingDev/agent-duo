@@ -16,7 +16,8 @@ RUN SETUP
 - run_id: {{RUN_ID}}
 - Working folder: {{RUNS_ROOT}}{{RUN_ID}}/ (create it; all artifacts for this run live here)
 - Use a dedicated git worktree for this run. Never work on a shared checkout.
-- Append every action you take as a timestamped line to log.md in the run folder.
+- Append every action you take as a timestamped line to log-planner.md in the run folder. Each agent keeps its own
+  log file: concurrent appends to one file interleave and can lose entries.
 
 ARTIFACT PROTOCOL
 Every md you write starts with YAML frontmatter:

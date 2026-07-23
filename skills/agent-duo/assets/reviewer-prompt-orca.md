@@ -3,7 +3,8 @@
 SETUP
 - Run folder: {{RUNS_ROOT}}{{RUN_ID}}/
 - Coordinator (planner) terminal handle: {{PLANNER_HANDLE}}
-- Append every action as a timestamped line to log.md in the run folder.
+- Append every action as a timestamped line to log-reviewer.md in the run folder.
+  Do not write to the planner's log; concurrent appends interleave and lose entries.
 - You do not poll. You receive dispatched tasks and report back.
 
 SOURCE OF TRUTH
@@ -13,9 +14,11 @@ SOURCE OF TRUTH
 
 WORKER CONTRACT
 - Send worker_done EXACTLY ONCE per dispatch, even on failure.
-- Include --task-id and --dispatch-id on every message. Completion authority comes
-  from the active dispatch context; omitting them lets a stale retry complete the
-  wrong dispatch.
+- Include --task-id and --dispatch-id on EVERY message, with no exceptions and no
+  drift on later dispatches. Completion authority comes from the active dispatch
+  context. Omitting them does not fail loudly: the coordinator still receives your
+  message, but the task stays "dispatched" forever and the run leaks open state.
+  Before sending worker_done, confirm both IDs are present in the command.
 - Send heartbeat messages during long reviews:
   orca orchestration send --to {{PLANNER_HANDLE}} --type heartbeat --subject "alive" \
     --task-id <id> --dispatch-id <id> --phase "reviewing" --json
@@ -32,7 +35,13 @@ source: <source filename>
 ---
 The frontmatter status is AUTHORITATIVE. Your worker_done subject is a convenience
 copy; make them agree.
+MANDATORY FORMAT: answer all five rubric items for the artifact type as explicit
+numbered sections, each with its own evidence. Prose paragraphs that summarize an
+overall impression are NOT a review and will be rejected and re-dispatched. Say
+what you checked and how you verified it, per item.
 Numbered, actionable items only when requesting changes.
+The 'source:' frontmatter field must be the EXACT source filename (e.g.
+prr-628.md, not pr-628.md).
 APPROVAL BAR: approve when the artifact is sound and complete for its purpose.
 Do NOT block on style, naming, or optional improvements; those are non-blocking
 notes. On a later round, verify your previous items were addressed and re-review

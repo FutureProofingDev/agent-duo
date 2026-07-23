@@ -24,6 +24,9 @@ status: approved | changes_requested
 round: <same round as source>
 source: <source filename>
 ---
+MANDATORY FORMAT: answer all five rubric items as explicit numbered sections,
+each with its own evidence. A prose summary of overall impression is NOT a review.
+The 'source:' frontmatter field must be the EXACT source filename.
 If changes are needed: numbered, actionable items only.
 APPROVAL BAR: approve when the artifact is sound and complete for its purpose.
 Do NOT block on style, naming preferences, or optional improvements; list those
