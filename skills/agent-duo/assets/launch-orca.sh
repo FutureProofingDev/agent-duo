@@ -6,14 +6,14 @@
 #   - Orchestration enabled:    Settings -> Experimental -> Orchestration
 #   - jq
 #
-# NOTE ON JQ PATHS: the Orca docs specify command shapes but not response bodies.
-# The selectors below are the expected shape. Run each command once with --json,
-# confirm the real field names, and adjust. Do this during the dry run.
+# JQ PATHS: verified against real Orca output. Responses are wrapped in .result
+# and worktreeId is a compound "<uuid>::<absolute path>" string, not a bare UUID,
+# so terminals are selected by title and paths come from .worktreePath.
 
 set -euo pipefail
 
 RUN_ID="{{RUN_ID}}"
-RUN_DIR="{{RUNS_ROOT}}{{RUN_ID}}"
+WT_NAME="duo-${RUN_ID}"
 PLANNER_AGENT="{{PLANNER_AGENT}}"     # claude | codex
 REVIEWER_AGENT="{{REVIEWER_AGENT}}"   # codex | claude
 
@@ -21,15 +21,26 @@ orca status --json >/dev/null || { echo "Orca runtime not reachable. Run: orca o
 
 # ONE worktree for the run. Orchestration handles signaling, but the reviewer
 # still has to READ spec files and code, so the shared filesystem stays.
-WT=$(orca worktree create --name "duo-${RUN_ID}" --agent "${REVIEWER_AGENT}" --json \
-     | jq -r '.worktree.id')
+# Create the worktree. Both agents live here: separate worktrees are separate
+# directories, which silently breaks the artifact handshake.
+orca worktree create --name "${WT_NAME}" --agent "${REVIEWER_AGENT}" --json >/dev/null
 
-REV=$(orca terminal list --worktree "id:${WT}" --json | jq -r '.terminals[0].handle')
+# worktreePath is the absolute path on disk. The run folder MUST live inside it,
+# so derive it here rather than assuming a relative path from the main checkout.
+WT_PATH=$(orca terminal list --worktree active --json \
+          | jq -r '.result.terminals[0].worktreePath')
+RUN_DIR="${WT_PATH}/{{RUNS_ROOT}}${RUN_ID}"
+mkdir -p "$RUN_DIR"
+
+# Select by title, not index: a worktree also contains plain shells such as
+# "Setup", and list order is not guaranteed.
+REV=$(orca terminal list --worktree active --json \
+      | jq -r --arg n "$WT_NAME" '.result.terminals[] | select(.title | test($n)) | .handle' | head -1)
 orca terminal wait --terminal "$REV" --for tui-idle --timeout-ms 120000 --json >/dev/null
 
 # Planner terminal in the SAME worktree.
 PLN=$(orca terminal split --terminal "$REV" --direction horizontal --command "${PLANNER_AGENT}" --json \
-      | jq -r '.terminal.handle')
+      | jq -r '.result.terminal.handle')
 orca terminal wait --terminal "$PLN" --for tui-idle --timeout-ms 120000 --json >/dev/null
 
 # Each agent must address the other, so handles are resolved here and injected
@@ -44,7 +55,7 @@ orca terminal wait --terminal "$REV" --for tui-idle --timeout-ms 120000 --json >
 
 orca terminal send --terminal "$PLN" --text "$(cat "${RUN_DIR}/planner.resolved.txt")" --enter --json >/dev/null
 
-echo "Duo running in orchestration mode, worktree ${WT}"
+echo "Duo running in orchestration mode, worktree ${WT_PATH}"
 echo "  coordinator (planner): ${PLN}"
 echo "  worker (reviewer):     ${REV}"
 echo
@@ -54,4 +65,4 @@ echo "  orca orchestration inbox --limit 20 --json"
 echo "  tail -f ${RUN_DIR}/log.md"
 echo
 echo "If Orca restarts mid-run, handles go stale. Reacquire with:"
-echo "  orca terminal list --worktree id:${WT} --json"
+echo "  orca terminal list --worktree active --json"

@@ -43,12 +43,31 @@ the reviewer is still booting, so nothing picks it up and the planner burns poll
 budget against an agent that was never listening. `terminal wait --for tui-idle`
 between the two starts is what enforces this.
 
-## Response shapes
+## Response shapes (verified)
 
-The Orca docs specify command shapes but not response bodies. The launcher's jq
-selectors (`.worktree.id`, `.terminals[0].handle`, `.terminal.handle`) are the
-expected shape, not verified ones. Check them against real `--json` output during
-the dry run and adjust.
+Every response is wrapped:
+
+```json
+{ "id": "...", "ok": true, "result": { ... }, "_meta": { "runtimeId": "..." } }
+```
+
+So selectors start at `.result`, e.g. `.result.terminals[0].handle`.
+
+Three things that bite:
+
+1. **`worktreeId` is compound**, not a bare UUID:
+   `<runtime-uuid>::<absolute worktree path>`. Do not pass it where a plain id is
+   expected. Use `--worktree active`, or match on `worktreePath`.
+2. **`worktreePath`** is the absolute path on disk. The run folder must live
+   inside it, so derive the run folder from this rather than assuming a relative
+   path from the main checkout. A worktree is a fresh directory: uncommitted
+   files from your main checkout are not in it.
+3. **Do not index terminals by position.** A worktree also holds plain shells
+   (e.g. a "Setup" terminal) and list order is not guaranteed. Select by title:
+   `.result.terminals[] | select(.title | test($name)) | .handle`.
+
+Handle format is `term_<uuid>`. Handles are runtime-scoped: after an Orca restart,
+reacquire with `orca terminal list --worktree active --json`.
 
 ## Orchestration layer (alternative design)
 
