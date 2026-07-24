@@ -1,0 +1,7 @@
+README: separate what needs Orca from what does not
+
+The quick start led with duo, which made Orca look mandatory. Only the launcher
+and the orchestration transport need it; the loop itself runs in any two agent
+sessions sharing a working directory. Adds a requirements table and a
+paste-the-prompts path for people not on Orca.
+

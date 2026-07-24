@@ -24,7 +24,20 @@ with no human in the middle except at escalation points.
   frontmatter in a per-run folder, so a run is diffable, committable, and
   debuggable after the fact.
 
-## Quick start
+## Requirements
+
+The workflow itself needs no particular IDE. Two capabilities are separate:
+
+| You want | You need |
+|---|---|
+| The loop (prompts, artifacts, rubrics, gate) | any two agent sessions, nothing else |
+| `duo` one-command launch | Orca ADE + its CLI + `jq` |
+| Orchestration transport (blocking waits, no polling) | Orca ADE + Settings -> Experimental -> Orchestration |
+
+Without Orca you lose the launcher and the blocking waits, not the workflow.
+See "Running it without Orca" below.
+
+## Quick start (with Orca)
 
 ```bash
 git clone git@github.com:FutureProofingDev/agent-duo.git ~/src/agent-duo
@@ -74,6 +87,27 @@ cp -r dist/agent-duo ~/.claude/skills/     # Claude Code
 Or upload `dist/agent-duo.skill` in the Claude app and click Save skill. Rebuild
 after changing anything under `references/`, `prompts/`, `bin/`, or
 `claude/SKILL.md`.
+
+## Running it without Orca
+
+Open two agent sessions in the same working directory. This matters: the agents
+coordinate through files, so separate checkouts break the handshake with no
+error.
+
+1. Copy `prompts/reviewer.md` and `prompts/planner.md`.
+2. Replace the `{{PLACEHOLDER}}` values by hand: `{{RUN_ID}}`,
+   `{{RUNS_ROOT}}` (e.g. `docs/superpowers/runs/`), `{{GATE_COMMANDS}}`, and
+   either the issue fields or `{{WORK_ITEM_TEXT}}`. Each template has two
+   commented variants, issue-backed and brief-backed; keep the matching one and
+   delete the other. `{{PLANNER_HANDLE}}` / `{{REVIEWER_HANDLE}}` are
+   orchestration-only, so ignore them here.
+3. Paste the reviewer prompt first and let it settle, then the planner. The
+   reviewer must be watching the folder before the first artifact lands, or
+   nothing picks it up.
+
+From there it is identical: same artifacts, same rubrics, same gate. The agents
+poll the run folder instead of receiving dispatches, and each gives up after 20
+empty polls so a stalled run does not burn tokens overnight.
 
 ## Transport modes
 
