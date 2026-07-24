@@ -80,10 +80,10 @@ split as file mode, expressed in Orca's model.
    both prompts must agree on every filename and token or the handshake stalls.
 2. Fill the two templates in `assets/`:
    File mode:
-   - `assets/planner-prompt.md` → the `/loop` prompt for the planner/executor agent
-   - `assets/reviewer-prompt.md` → the `/goal` prompt for the reviewer agent
+   - `assets/planner.md` → the `/loop` prompt for the planner/executor agent
+   - `assets/reviewer.md` → the `/goal` prompt for the reviewer agent
    Orchestration mode:
-   - `assets/planner-prompt-orca.md` and `assets/reviewer-prompt-orca.md`
+   - `assets/planner-orca.md` and `assets/reviewer-orca.md`
      Leave `{{REVIEWER_HANDLE}}` / `{{PLANNER_HANDLE}}` unsubstituted: terminal
      handles are runtime-scoped and the launcher resolves them at start.
    Replace every `{{PLACEHOLDER}}` with the collected values. The templates
@@ -127,6 +127,34 @@ split as file mode, expressed in Orca's model.
 - **Re-review only what changed** between rounds (both sides).
 - **Reviewer never blocks on style.** Style/naming/optional improvements go in
   non-blocking notes.
+
+## Automating repeat runs
+
+After the first run, prompt generation needs no LLM: it is pure placeholder
+substitution. `bin/duo.sh` (shipped as `assets/duo.sh` in the built skill) does the whole launch in one command.
+
+```bash
+duo --task "hide signup in login page" --run-id b
+duo --issue https://github.com/org/repo/issues/612 --run-id 612-a
+duo --task "..." --run-id c --new-worktree     # fresh worktree instead of reuse
+```
+
+It resets the branch, resolves runtime-scoped terminal handles, fills both
+templates, and sends them reviewer-first.
+
+There is ONE launcher, not one per agent. Roles are flags:
+
+```bash
+duo --task "..." --run-id d --planner codex --reviewer claude
+```
+
+`DUO_HOME` can point at either clone (`agent-duo` or `agent-duo-codex`) and at
+either a repo root or the skill folder; the script probes the known layouts.
+Set `DUO_GATE` to the repo's gate commands.
+
+Generate prompts through this skill when the task needs scoping judgment, and
+through `duo.sh` when the parameters are already known. Same templates, so the
+output is identical.
 
 ## Operational checks to relay to the user
 

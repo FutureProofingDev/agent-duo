@@ -1,8 +1,8 @@
 # agent-duo
 
-A Claude skill that generates paired prompts for an automated **planner/executor + reviewer**
-workflow. Point it at any work item — a GitHub issue, a bug report, a pasted feature idea —
-and it produces two prompts you drop into two agents. They then run:
+An automated **planner/executor + reviewer** loop. Point it at any work item, a
+GitHub issue, a bug report, or a pasted feature idea, and two agents take it
+through:
 
 ```
 brief → SPEC (approved) → PLAN (approved) → execute → gate → PR (approved)
@@ -12,65 +12,90 @@ with no human in the middle except at escalation points.
 
 ## Why it works
 
-- **Decorrelated pair.** The coder and reviewer are different models (different vendors,
-  different training), so they fail differently. The reviewer catches what the coder waves
-  through. Roles are swappable: Opus plans + Sol reviews, or the inverse.
-- **Spec before plan.** The spec review asks "is this the right thing to build?"; the plan
-  review asks "is this the right way to build it?". Collapsing them is where scope creep hides.
-- **A deterministic gate.** Tests, lint, and build must pass between plan approval and PR.
-  LLMs review design; the harness reviews quality.
-- **Filesystem as protocol.** No shared memory or direct messaging. Agents coordinate through
-  markdown files with YAML frontmatter in a per-run folder.
+- **Decorrelated pair.** The coder and reviewer are different models, so they
+  fail differently and the reviewer catches what the coder waves through. Roles
+  are flags, not repos: either model can plan or review.
+- **Spec before plan.** The spec review asks "is this the right thing to build?";
+  the plan review asks "is this the right way to build it?". Collapsing them is
+  where scope creep hides.
+- **A deterministic gate.** Tests, lint, and build must pass between plan
+  approval and PR. LLMs review design; the harness reviews quality.
+- **Filesystem as record.** Every artifact is a markdown file with YAML
+  frontmatter in a per-run folder, so a run is diffable, committable, and
+  debuggable after the fact.
 
-## Install
-
-**Claude.ai / desktop:** download `agent-duo.skill`, upload it into any chat, click
-"Save skill" (or add it from Settings → Skills).
-
-**Claude Code:** copy the skill folder into your skills directory.
+## Quick start
 
 ```bash
-cp -r skills/agent-duo ~/.claude/skills/          # user-level
-cp -r skills/agent-duo .claude/skills/            # project-level
+git clone git@github.com:FutureProofingDev/agent-duo.git ~/src/agent-duo
+export DUO_HOME=~/src/agent-duo
+export DUO_GATE="pnpm test:run && pnpm lint"
+ln -s $DUO_HOME/bin/duo.sh /usr/local/bin/duo
+
+duo --task "hide signup in login page" --run-id b
+duo --issue https://github.com/org/repo/issues/612 --run-id 612-a
+duo --task "..." --run-id c --planner codex --reviewer claude
 ```
 
-## Use
+`duo` resets the branch, resolves runtime-scoped terminal handles, fills both
+prompt templates, and sends them reviewer-first (the coordinator cannot dispatch
+to an agent that is not up yet).
 
-Ask Claude in plain language:
+Watch a run:
 
-```
-generate the duo prompts for issue #612
-arma el duo: Sol planifica, Opus revisa. El feature es: <descripción>
-```
-
-It collects what's missing (role assignment, run_id, gate commands) and outputs both prompts
-ready to paste into your agents.
-
-## Before your first real run
-
-1. **Dry-run the handshake** on a throwaway task. The weak link is whether your IDE's polling
-   actually wakes each agent on file changes. Watch `log.md` from both sides.
-2. **Set real gate commands.** The planner treats whatever is in the gate as the ship condition.
-
-## Repo layout
-
-```
-skills/agent-duo/
-  SKILL.md                    triggering + generation workflow
-  references/protocol.md      artifact protocol (frontmatter, filenames, state machine)
-  assets/planner-prompt.md    planner/executor template
-  assets/reviewer-prompt.md   reviewer template
-agent-duo.skill               packaged, installable bundle
+```bash
+orca orchestration task-list --json | jq '.result.tasks[] | select(.task_title | contains("run b"))'
+tail -f <worktree>/docs/superpowers/runs/b/log-planner.md
 ```
 
-## Codex side
+## Layout
 
-The equivalent for Codex-driven agents lives in
-[`agent-duo-codex`](https://github.com/FutureProofingDev/agent-duo-codex).
-Both repos implement the **same protocol** — see `references/protocol.md` here and
-`PROTOCOL.md` there. If you change the protocol, change it in both, or the handshake breaks.
+```
+bin/duo.sh          the launcher (one script, both agents, both transports)
+prompts/            prompt templates: planner/reviewer x file/orchestration mode
+references/         protocol spec, orchestration mapping, Orca CLI notes
+claude/SKILL.md     Claude skill instructions
+codex/AGENTS.md     what a Codex agent reads on session start
+build.sh            assembles dist/agent-duo.skill from the above
+dist/               GENERATED, never edit
+```
+
+Single source of truth per file. Claude and Codex read instructions from
+different places, which is why `claude/` and `codex/` both exist, but they point
+at the same `references/` and `prompts/`.
+
+## Installing the Claude skill
+
+```bash
+./build.sh
+cp -r dist/agent-duo ~/.claude/skills/     # Claude Code
+```
+
+Or upload `dist/agent-duo.skill` in the Claude app and click Save skill. Rebuild
+after changing anything under `references/`, `prompts/`, `bin/`, or
+`claude/SKILL.md`.
+
+## Transport modes
+
+- **file** (default, portable): agents poll the run folder. Works in any IDE.
+- **orchestration** (Orca, experimental): coordinator/worker dispatches and
+  blocking waits. No polling and no wasted tokens; timeouts become checkpoints
+  rather than guesses. See `references/orchestration.md`.
+
+Same protocol and artifacts either way; only the signaling changes.
+
+## Before your first run
+
+1. **Dry-run on a throwaway task.** The weak link is whether the IDE actually
+   wakes each agent.
+2. **Set real gate commands.** The planner treats whatever is in the gate as the
+   ship condition, so a placeholder means shipping unverified code.
+3. **Both agents share ONE worktree.** Git worktrees are separate directories,
+   so splitting them breaks the artifact handshake and stalls with no error.
 
 ## Contributing
 
-The reviewer rubric is the part most worth tuning with real data. If you run this, open a PR
-with what you learned from your `log.md` (rounds burned, false blocks, missed issues).
+The reviewer rubric is the part most worth tuning with real data.
+`references/protocol.md` ends with field findings from live runs; add to it. If
+you run this, open a PR with what you learned from your run logs: rounds burned,
+false blocks, misses.
