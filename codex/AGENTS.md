@@ -2,7 +2,7 @@
 
 <!-- This file is read by a Codex agent that IS one of the two duo agents during
 a run (its role is set by the prompt it received). To START a run as a human,
-use the skill instead: $agent-duo, or bin/duo.sh. Same protocol either way. -->
+use the skill instead: $agent-duo (installed under .agents/skills/), or bin/duo.sh. Same protocol either way. -->
 
 You are one half of a two-agent workflow. Your role — PLANNER/EXECUTOR or REVIEWER — is
 assigned by the prompt you were given at session start. Read `../skill/references/protocol.md` before acting;

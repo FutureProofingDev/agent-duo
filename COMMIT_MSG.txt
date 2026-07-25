@@ -1,19 +1,7 @@
-Consolidate to one portable SKILL.md skill for all agents
+Fix Codex skills path: .agents/skills, not .codex/skills
 
-SKILL.md is an open standard (Claude Code, Codex, Cursor, 30+ tools), not an
-Anthropic format, so the same skill folder serves every agent and only the
-install path differs. Collapses the former claude/ + codex/ split.
-
-- skill/ is now the single source and the installable artifact: SKILL.md,
-  assets/ (prompts), references/, agents/openai.yaml
-- agents/openai.yaml sets allow_implicit_invocation: false, since the skill
-  launches a second agent and can open PRs; explicit $agent-duo only
-- codex/AGENTS.md kept but reframed: it is read by a Codex process that IS a
-  duo agent mid-run, not the human entry point; paths point into skill/
-- README gains an install matrix (Claude app / Claude Code / Codex personal /
-  Codex per-repo) replacing the two separate install sections
-- stripped em dashes from SKILL.md (flagged AI tell)
-
-Codex custom prompts (dist/codex-prompts) retained but marked deprecated in
-favor of the skill, per OpenAI's own guidance and the $ARGUMENTS truncation bug.
+Codex discovers skills under .agents/skills/ (the cross-agent standard path)
+and ~/.agents/skills/, not ~/.codex/skills/ as the install matrix previously
+said. Verified working on a live install. Corrects README matrix, build.sh
+hint, and AGENTS.md.
 

@@ -89,12 +89,13 @@ two running agents, not how a human starts a run.
 |---|---|
 | Claude app | upload `dist/agent-duo.skill`, click Save skill |
 | Claude Code | `cp -r dist/agent-duo ~/.claude/skills/` |
-| Codex (personal) | `cp -r dist/agent-duo ~/.codex/skills/` |
-| Codex (per-repo, shared) | `cp -r dist/agent-duo .codex/skills/` and commit |
+| Codex (personal) | `cp -r dist/agent-duo ~/.agents/skills/` |
+| Codex (per-repo, shared) | `cp -r dist/agent-duo .agents/skills/` and commit |
 
-In Codex, invoke with `$agent-duo` or `/skills`; it is set explicit-only so a
-stray prompt never triggers it. Restart the agent after installing so it loads.
-Rebuild after editing anything under `skill/`.
+Codex reads skills from `.agents/skills/` (the cross-agent standard path), NOT
+`~/.codex/skills/`. In Codex, invoke with `$agent-duo` or browse `/skills`; it is
+explicit-only, so a stray prompt never triggers it. Restart the agent after
+installing so it loads. Rebuild after editing anything under `skill/`.
 
 ## Running it without Orca
 

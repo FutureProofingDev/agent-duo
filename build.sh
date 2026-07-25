@@ -29,7 +29,7 @@ cat <<MSG
 built:
   dist/agent-duo.skill          upload in Claude, or unzip into a skills dir
   dist/agent-duo/               the skill folder (copy into ~/.claude/skills/,
-                                ~/.codex/skills/, or .codex/skills/ in a repo)
+                                ~/.agents/skills/, or .agents/skills/ in a repo)
   dist/claude-commands/*.md     -> <repo>/.claude/commands/ or ~/.claude/commands/
   dist/codex-prompts/*.md       -> ~/.codex/prompts/  (deprecated; skill preferred)
 MSG
