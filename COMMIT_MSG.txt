@@ -1,7 +1,13 @@
-README: separate what needs Orca from what does not
+Add /agent-duo slash command for Claude Code and Codex
 
-The quick start led with duo, which made Orca look mandatory. Only the launcher
-and the orchestration transport need it; the loop itself runs in any two agent
-sessions sharing a working directory. Adds a requirements table and a
-paste-the-prompts path for people not on Orca.
+Runs the whole loop from inside one agent: resolves the peer terminal, launches
+the reviewer there with an inlined filled template, then adopts the planner role
+in the current terminal. Still Orca-only, since it drives a second terminal, but
+no shell wrapper needed.
+
+- commands/ holds the two command shells (agent-duo, agent-duo-review)
+- templates/ holds planner/reviewer bodies extracted from prompts/, spliced in
+  at build time so nothing is duplicated by hand
+- build.sh now also emits dist/claude-commands and dist/codex-prompts
+- agent-duo-review is a manual-start fallback if peer resolution is ambiguous
 

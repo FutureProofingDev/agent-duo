@@ -109,6 +109,30 @@ From there it is identical: same artifacts, same rubrics, same gate. The agents
 poll the run folder instead of receiving dispatches, and each gives up after 20
 empty polls so a stalled run does not burn tokens overnight.
 
+## Slash commands (Orca, one-shot from inside an agent)
+
+If you would rather not use the shell launcher, run the whole thing from inside
+Claude Code or Codex:
+
+```
+/agent-duo --task "hide signup in login page" --run-id b
+```
+
+The command resolves the peer terminal, launches the reviewer there, then adopts
+the planner role in the current terminal. Like `duo.sh` it needs the `orca` CLI,
+since it still drives a second terminal; the difference is you invoke it from
+inside the agent instead of a shell.
+
+Install (run `./build.sh` first):
+
+```bash
+cp dist/claude-commands/*.md  <repo>/.claude/commands/    # or ~/.claude/commands/
+cp dist/codex-prompts/*.md    ~/.codex/prompts/
+```
+
+`agent-duo-review` is a fallback for starting the reviewer by hand if
+auto-launch mis-resolves the peer terminal.
+
 ## Transport modes
 
 - **file** (default, portable): agents poll the run folder. Works in any IDE.

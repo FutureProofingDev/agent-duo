@@ -23,5 +23,10 @@ chmod +x "$OUT/assets/duo.sh"
 # A .skill file is a zip of the skill folder.
 (cd "$ROOT/dist" && zip -qr agent-duo.skill agent-duo)
 
+# Slash commands for Claude Code and Codex.
+"$ROOT/build-commands.sh" >/dev/null
+
 echo "built: dist/agent-duo.skill"
+echo "       dist/claude-commands/  (agent-duo, agent-duo-review)"
+echo "       dist/codex-prompts/"
 echo "install: upload it in Claude, or  cp -r dist/agent-duo ~/.claude/skills/"
