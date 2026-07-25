@@ -64,29 +64,37 @@ tail -f <worktree>/docs/superpowers/runs/b/log-planner.md
 ## Layout
 
 ```
-bin/duo.sh          the launcher (one script, both agents, both transports)
-prompts/            prompt templates: planner/reviewer x file/orchestration mode
-references/         protocol spec, orchestration mapping, Orca CLI notes
-claude/SKILL.md     Claude skill instructions
-codex/AGENTS.md     what a Codex agent reads on session start
-build.sh            assembles dist/agent-duo.skill from the above
+skill/              the portable SKILL.md skill (works in Claude Code, Codex,
+  SKILL.md            Cursor, any SKILL.md-aware agent)
+  assets/             prompt templates (planner/reviewer x file/orca)
+  references/         protocol spec, orchestration mapping, Orca CLI notes
+  agents/openai.yaml  Codex invocation policy (explicit-only)
+bin/duo.sh          the shell launcher (Orca)
+commands/, templates/  sources for the optional Orca slash commands
+codex/AGENTS.md     read by a Codex agent that IS a duo agent mid-run
+build.sh            packages skill/ and assembles slash commands
 dist/               GENERATED, never edit
 ```
 
-Single source of truth per file. Claude and Codex read instructions from
-different places, which is why `claude/` and `codex/` both exist, but they point
-at the same `references/` and `prompts/`.
+`SKILL.md` is an open standard, not Anthropic-specific, so ONE skill folder
+serves every agent. Only the install location differs. `codex/AGENTS.md` is a
+different thing: it is what a Codex process reads when it is itself one of the
+two running agents, not how a human starts a run.
 
-## Installing the Claude skill
+## Installing the skill
 
-```bash
-./build.sh
-cp -r dist/agent-duo ~/.claude/skills/     # Claude Code
-```
+`./build.sh` first, then install the same skill folder wherever you need it:
 
-Or upload `dist/agent-duo.skill` in the Claude app and click Save skill. Rebuild
-after changing anything under `references/`, `prompts/`, `bin/`, or
-`claude/SKILL.md`.
+| Agent | Location |
+|---|---|
+| Claude app | upload `dist/agent-duo.skill`, click Save skill |
+| Claude Code | `cp -r dist/agent-duo ~/.claude/skills/` |
+| Codex (personal) | `cp -r dist/agent-duo ~/.codex/skills/` |
+| Codex (per-repo, shared) | `cp -r dist/agent-duo .codex/skills/` and commit |
+
+In Codex, invoke with `$agent-duo` or `/skills`; it is set explicit-only so a
+stray prompt never triggers it. Restart the agent after installing so it loads.
+Rebuild after editing anything under `skill/`.
 
 ## Running it without Orca
 

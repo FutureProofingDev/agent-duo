@@ -1,0 +1,5 @@
+# Codex UI metadata + invocation policy for the agent-duo skill.
+policy:
+  # This skill starts a second agent, resets branches, and can open PRs.
+  # Never let a stray prompt trigger it; require an explicit $agent-duo mention.
+  allow_implicit_invocation: false

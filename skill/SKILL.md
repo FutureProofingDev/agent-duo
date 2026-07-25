@@ -1,6 +1,6 @@
 ---
 name: agent-duo
-description: Generate paired prompts for an automated two-agent planner/reviewer workflow in Orca ADE (or any multi-agent IDE) that takes any work item — a GitHub issue, a pasted bug report, a feature description, or a brand-new feature idea — from spec to approved PR with zero human intervention between checkpoints. One agent plans and executes, a second decorrelated agent reviews plans and PRs; either model can take either role (Opus planning + Sol reviewing, Sol planning + Opus reviewing, any pair). Coordination happens through frontmatter-tagged markdown files in a per-run folder. Use this skill whenever the user wants to set up an agent duo, agent pair, planner/reviewer loop, automated code review loop, multi-agent workflow for an issue/bug/feature, or says things like "arma el duo para esto", "generate the duo prompts", "run the two-agent loop", or mentions cr-*.md / prr-*.md handshake files.
+description: Generate paired prompts for an automated two-agent planner/reviewer workflow in Orca ADE (or any multi-agent IDE) that takes any work item (a GitHub issue, a pasted bug report, a feature description, or a brand-new feature idea) from spec to approved PR with zero human intervention between checkpoints. One agent plans and executes, a second decorrelated agent reviews plans and PRs; either model can take either role (Opus planning + Sol reviewing, Sol planning + Opus reviewing, any pair). Coordination happens through frontmatter-tagged markdown files in a per-run folder. Use this skill whenever the user wants to set up an agent duo, agent pair, planner/reviewer loop, automated code review loop, multi-agent workflow for an issue/bug/feature, or says things like "arma el duo para esto", "generate the duo prompts", "run the two-agent loop", or mentions cr-*.md / prr-*.md handshake files.
 ---
 
 # Agent Duo: Planner + Reviewer Loop
@@ -8,7 +8,7 @@ description: Generate paired prompts for an automated two-agent planner/reviewer
 Generates the two prompts that drive an automated planner/executor + reviewer
 pair working any work item through spec → plan → execute → approved PR.
 The spec phase judges the WHAT (right thing to build), the plan phase judges
-the HOW (right way to build it) — each is a separately reviewed and approved
+the HOW (right way to build it), each is a separately reviewed and approved
 artifact. Brainstorming stays outside the duo: it is human-driven and
 divergent; its output becomes the brief that seeds the run. The agents coordinate
 through markdown files with YAML frontmatter in a per-run folder. No shared
@@ -18,25 +18,25 @@ memory, no direct messaging: the filesystem is the protocol.
 
 Collect these before generating. If any are missing, ask once, concisely:
 
-1. **Work item** — any ONE of:
+1. **Work item** can be any ONE of:
    - A GitHub issue URL
    - A pasted description of a bug, problem, or feature
    - A rough idea for a brand-new feature ("we need X")
    See "Work item handling" below for how each shapes the prompts.
-2. **Role assignment** — which model is PLANNER/EXECUTOR and which is REVIEWER.
+2. **Role assignment**: which model is PLANNER/EXECUTOR and which is REVIEWER.
    The roles are model-agnostic: Opus planning + Sol reviewing works, and so
-   does the inverse. If the user doesn't say, ask — never assume a default
+   does the inverse. If the user doesn't say, ask, never assume a default
    direction. The only requirement worth stating: the pair should be
    decorrelated (different vendors/training) so their failure modes differ.
-3. **run_id** — default: `<issue-number>-a` when there's an issue, otherwise a
+3. **run_id** default: `<issue-number>-a` when there's an issue, otherwise a
    short kebab slug of the work item + `-a` (e.g. `email-dedup-a`).
    Increment the letter for retries.
-4. **Runs folder root** — default: `docs/superpowers/runs/`
+4. **Runs folder root** default: `docs/superpowers/runs/`
 5. **Transport mode** - `file` (default, portable) or `orchestration`
    (Orca-native). Ask only if the user mentions Orca or orchestration;
    otherwise default to `file` and mention orchestration exists.
    See "Transport modes" below.
-6. **Deterministic gate command(s)** — the test/lint/build commands that must
+6. **Deterministic gate command(s)**, the test/lint/build commands that must
    pass before a PR opens. If unspecified, insert a placeholder
    `<GATE: tests + lint + build commands here>` and tell the user to fill it in.
 
@@ -52,7 +52,7 @@ The protocol is identical in all cases; only the source of truth changes.
   exactly. The planner derives explicit acceptance criteria in the SPEC phase,
   and the spec review's first rubric item judges whether those criteria are a
   faithful, complete reading of the brief without invented scope. This makes
-  the criteria themselves a reviewed artifact — crucial when no human wrote
+  the criteria themselves a reviewed artifact, crucial when no human wrote
   them. A brainstorm transcript or its conclusions pasted as the work item is
   a normal brief run.
 
@@ -76,7 +76,7 @@ split as file mode, expressed in Orca's model.
 ## How to generate
 
 1. Read `references/protocol.md` for the full artifact protocol (frontmatter
-   schema, filenames, status tokens, ownership rules). Follow it exactly —
+   schema, filenames, status tokens, ownership rules). Follow it exactly ,
    both prompts must agree on every filename and token or the handshake stalls.
 2. Fill the two templates in `assets/`:
    File mode:
@@ -88,7 +88,7 @@ split as file mode, expressed in Orca's model.
      handles are runtime-scoped and the launcher resolves them at start.
    Replace every `{{PLACEHOLDER}}` with the collected values. The templates
    contain `{{WORK_ITEM_BLOCK}}` / `{{RUBRIC_ITEM_1}}` slots whose content
-   depends on the work item type — both variants are given inline in each
+   depends on the work item type, both variants are given inline in each
    template; pick the matching one and delete the other.
 3. Write both prompts to the run folder as `planner.txt` and `reviewer.txt`.
    This keeps the exact prompt text next to `log.md` and the artifacts it
@@ -103,7 +103,7 @@ split as file mode, expressed in Orca's model.
    For other IDEs, skip the launcher and let them paste manually.
 6. After the prompts, remind the user of the two operational checks (below).
 
-## Invariants — never violate these when customizing
+## Invariants (never violate these when customizing)
 
 - **Spec before plan, always.** spec-v*.md (what) must be approved before
   plan-v*.md (how) is written. After approval the spec is FROZEN: if planning
@@ -162,7 +162,7 @@ output is identical.
    whether the IDE's polling actually wakes each agent on file changes. Watch
    `log.md` from both sides during the dry run. If using the Orca launcher,
    also verify the jq field paths against real `--json` output on this run.
-2. **The gate placeholder must be real commands** before a production run —
+2. **The gate placeholder must be real commands** before a production run ,
    the planner will treat whatever is there as the ship condition.
 
 ## Customizations users commonly ask for

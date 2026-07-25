@@ -1,13 +1,19 @@
-Add /agent-duo slash command for Claude Code and Codex
+Consolidate to one portable SKILL.md skill for all agents
 
-Runs the whole loop from inside one agent: resolves the peer terminal, launches
-the reviewer there with an inlined filled template, then adopts the planner role
-in the current terminal. Still Orca-only, since it drives a second terminal, but
-no shell wrapper needed.
+SKILL.md is an open standard (Claude Code, Codex, Cursor, 30+ tools), not an
+Anthropic format, so the same skill folder serves every agent and only the
+install path differs. Collapses the former claude/ + codex/ split.
 
-- commands/ holds the two command shells (agent-duo, agent-duo-review)
-- templates/ holds planner/reviewer bodies extracted from prompts/, spliced in
-  at build time so nothing is duplicated by hand
-- build.sh now also emits dist/claude-commands and dist/codex-prompts
-- agent-duo-review is a manual-start fallback if peer resolution is ambiguous
+- skill/ is now the single source and the installable artifact: SKILL.md,
+  assets/ (prompts), references/, agents/openai.yaml
+- agents/openai.yaml sets allow_implicit_invocation: false, since the skill
+  launches a second agent and can open PRs; explicit $agent-duo only
+- codex/AGENTS.md kept but reframed: it is read by a Codex process that IS a
+  duo agent mid-run, not the human entry point; paths point into skill/
+- README gains an install matrix (Claude app / Claude Code / Codex personal /
+  Codex per-repo) replacing the two separate install sections
+- stripped em dashes from SKILL.md (flagged AI tell)
+
+Codex custom prompts (dist/codex-prompts) retained but marked deprecated in
+favor of the skill, per OpenAI's own guidance and the $ARGUMENTS truncation bug.
 

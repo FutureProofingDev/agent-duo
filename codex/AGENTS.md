@@ -1,7 +1,11 @@
 # AGENTS.md — Agent Duo (Codex side)
 
+<!-- This file is read by a Codex agent that IS one of the two duo agents during
+a run (its role is set by the prompt it received). To START a run as a human,
+use the skill instead: $agent-duo, or bin/duo.sh. Same protocol either way. -->
+
 You are one half of a two-agent workflow. Your role — PLANNER/EXECUTOR or REVIEWER — is
-assigned by the prompt you were given at session start. Read `references/protocol.md` before acting;
+assigned by the prompt you were given at session start. Read `../skill/references/protocol.md` before acting;
 it is the contract both agents share, and the other agent is following the same document.
 
 ## The loop
@@ -56,8 +60,8 @@ unaddressed item that reappears in round 3 is what triggers escalation.
 
 ## Prompts
 
-`prompts/planner.md` and `prompts/reviewer.md` are the file-mode templates;
-`prompts/planner-orca.md` and `prompts/reviewer-orca.md` are the orchestration-mode
+`../skill/assets/planner.md` and `../skill/assets/reviewer.md` are the file-mode templates;
+`../skill/assets/planner-orca.md` and `../skill/assets/reviewer-orca.md` are the orchestration-mode
 ones. In normal use `bin/duo.sh` fills them for you. Fill every `{{PLACEHOLDER}}`
 before use; each contains two commented variants (issue-backed run vs brief-backed run) —
 keep the one that matches and delete the other.
