@@ -26,7 +26,7 @@ Parse these from "$ARGUMENTS":
      yourself.
 
 2. Create the run folder under the worktree:
-   `<worktreePath>/docs/superpowers/runs/<run-id>/`
+   `<worktreePath>/docs/agent-duo/runs/<run-id>/`
 
 3. Reset the branch in the worktree to a clean base unless the user said not to:
    `git -C <worktreePath> checkout develop && git -C <worktreePath> pull`

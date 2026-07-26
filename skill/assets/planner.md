@@ -19,6 +19,10 @@ RUN SETUP
 - Append every action you take as a timestamped line to log-planner.md in the run folder. Each agent keeps its own
   log file: concurrent appends to one file interleave and can lose entries.
 
+NOTE ON CROSS-RUN MEMORY: docs/agent-duo/lessons.md is the REVIEWER's memory.
+Do not read it or pre-empt it. Feeding "you tend to err at X" to a planner
+invites overcorrection; lessons steer the reviewer's attention, not yours.
+
 ARTIFACT PROTOCOL
 Every md you write starts with YAML frontmatter:
 ---

@@ -2,4 +2,7 @@ dist/
 .DS_Store
 node_modules/
 *.log
-docs/superpowers/runs/
+docs/agent-duo/runs/
+# but DO track the cross-run memory:
+!docs/agent-duo/lessons.md
+!docs/agent-duo/lessons-pending.md

@@ -18,6 +18,10 @@ RUN SETUP
   its OWN log file: both appending to one log.md interleaves entries out of
   chronological order and risks losing an entry to a concurrent write.
 
+NOTE ON CROSS-RUN MEMORY: docs/agent-duo/lessons.md is the REVIEWER's memory.
+Do not read it or pre-empt it. Feeding "you tend to err at X" to a planner
+invites overcorrection; lessons steer the reviewer's attention, not yours.
+
 ARTIFACT PROTOCOL (unchanged from file mode)
 Every md you write starts with YAML frontmatter:
 ---

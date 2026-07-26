@@ -1,7 +1,22 @@
-Fix Codex skills path: .agents/skills, not .codex/skills
+Add per-repo cross-run learning; rename runs path to docs/agent-duo
 
-Codex discovers skills under .agents/skills/ (the cross-agent standard path)
-and ~/.agents/skills/, not ~/.codex/skills/ as the install matrix previously
-said. Verified working on a live install. Corrects README matrix, build.sh
-hint, and AGENTS.md.
+Two changes.
+
+Path: default runs folder is now docs/agent-duo/runs (was docs/superpowers/runs,
+inherited from the older SDD flow). New-runs-only, so no in-flight run is
+affected and existing run folders in other repos keep working where they are.
+
+Learning: the reviewer now keeps a per-repo memory in docs/agent-duo/lessons.md
+so runs improve without a human editing prompts. Four safeguards keep it signal,
+not noise:
+- promotion by repetition: a candidate becomes an active lesson only when the
+  same pattern recurs in a different run (one-off blocks never become dogma)
+- generality filter: lessons must be transferable planner-behavior patterns,
+  never code-specific facts
+- advisory only: active lessons steer reviewer attention, never auto-block, and
+  planners never read them (avoids overcorrection)
+- decay: unconfirmed lessons go dormant after 5 runs, so fixed patterns retire
+
+lessons.md and lessons-pending.md are force-tracked in git; runs/ stays ignored.
+Full mechanism in references/learning.md.
 

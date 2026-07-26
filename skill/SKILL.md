@@ -31,7 +31,7 @@ Collect these before generating. If any are missing, ask once, concisely:
 3. **run_id** default: `<issue-number>-a` when there's an issue, otherwise a
    short kebab slug of the work item + `-a` (e.g. `email-dedup-a`).
    Increment the letter for retries.
-4. **Runs folder root** default: `docs/superpowers/runs/`
+4. **Runs folder root** default: `docs/agent-duo/runs/`
 5. **Transport mode** - `file` (default, portable) or `orchestration`
    (Orca-native). Ask only if the user mentions Orca or orchestration;
    otherwise default to `file` and mention orchestration exists.
@@ -103,8 +103,23 @@ split as file mode, expressed in Orca's model.
    For other IDEs, skip the launcher and let them paste manually.
 6. After the prompts, remind the user of the two operational checks (below).
 
+## Cross-run learning (per-repo)
+
+The reviewer keeps a per-repo memory in `docs/agent-duo/lessons.md` so runs
+improve over time without a human editing prompts. It reads active lessons as a
+"where planners tend to err here" checklist, and after a run proposes new ones.
+A candidate becomes an active lesson only when the same pattern recurs in a
+different run, decays to dormant if unconfirmed for 5 runs, and must be a
+transferable behavior pattern rather than a code fact. Planners never read
+lessons (that would invite overcorrection). Full mechanism in
+`references/learning.md`.
+
 ## Invariants (never violate these when customizing)
 
+- **Lessons are advisory and per-repo.** Active lessons steer reviewer
+  attention; they are never auto-block rules and never cross repos. Planners do
+  not read them. A lesson must be a transferable planner-behavior pattern, not a
+  code-specific fact, and must recur before it persists.
 - **Spec before plan, always.** spec-v*.md (what) must be approved before
   plan-v*.md (how) is written. After approval the spec is FROZEN: if planning
   or execution reveals it must change, the planner escalates, never silently

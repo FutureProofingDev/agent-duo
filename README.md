@@ -58,7 +58,7 @@ Watch a run:
 
 ```bash
 orca orchestration task-list --json | jq '.result.tasks[] | select(.task_title | contains("run b"))'
-tail -f <worktree>/docs/superpowers/runs/b/log-planner.md
+tail -f <worktree>/docs/agent-duo/runs/b/log-planner.md
 ```
 
 ## Layout
@@ -105,7 +105,7 @@ error.
 
 1. Copy `prompts/reviewer.md` and `prompts/planner.md`.
 2. Replace the `{{PLACEHOLDER}}` values by hand: `{{RUN_ID}}`,
-   `{{RUNS_ROOT}}` (e.g. `docs/superpowers/runs/`), `{{GATE_COMMANDS}}`, and
+   `{{RUNS_ROOT}}` (e.g. `docs/agent-duo/runs/`), `{{GATE_COMMANDS}}`, and
    either the issue fields or `{{WORK_ITEM_TEXT}}`. Each template has two
    commented variants, issue-backed and brief-backed; keep the matching one and
    delete the other. `{{PLANNER_HANDLE}}` / `{{REVIEWER_HANDLE}}` are
