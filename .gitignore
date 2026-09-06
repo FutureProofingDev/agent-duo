@@ -2,6 +2,7 @@ dist/
 .DS_Store
 node_modules/
 *.log
+__pycache__/
 docs/agent-duo/runs/
 # but DO track the cross-run memory:
 !docs/agent-duo/lessons.md

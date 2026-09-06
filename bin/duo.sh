@@ -1,183 +1,380 @@
 #!/usr/bin/env bash
-# duo - start an agent duo run in Orca ADE with one command.
-#
-#   duo --task "hide signup in login page" --run-id b
-#   duo --issue https://github.com/org/repo/issues/612 --run-id 612-a
-#   duo --task "..." --run-id c --new-worktree
-#
-# Reuses the current worktree's terminals by default. Prompt generation is pure
-# templating, so no LLM call is involved and runs are byte-for-byte reproducible.
-
+# duo --task "hide signup" --run-id signup
+# duo --issue https://github.com/org/repo/issues/612 --run-id 612-a --new-worktree
+# duo --resume --run-id signup
+# Python owns argv, JSON and literal template values; no user text is shell code.
 set -euo pipefail
+exec python3 - "$0" "$@" <<'PY'
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
 
-# ---------------------------------------------------------------- defaults ---
-DUO_HOME="${DUO_HOME:-$HOME/src/agent-duo}"   # either clone, either layout
-MODE="orchestration"          # orchestration | file
-PLANNER_AGENT="claude"
-REVIEWER_AGENT="codex"
-GATE="${DUO_GATE:-pnpm test:run && pnpm lint}"
-RUNS_ROOT="docs/agent-duo/runs"
-BASE_BRANCH="develop"
-NEW_WORKTREE=0
-RESET_BRANCH=1
-TASK="" ; ISSUE="" ; RUN_ID="" ; REV="" ; PLN=""
+SCRIPT = Path(sys.argv[1]).resolve()
+PROTOCOL_VERSION = 2
+RUNS_ROOT = Path('docs/agent-duo/runs')
+TOKEN = re.compile(r'\{\{([A-Z_]+)\}\}')
+KEYS = {'RUN_ID', 'RUNS_ROOT', 'GATE_COMMANDS', 'WORK_ITEM_BLOCK',
+        'SOURCE_OF_TRUTH_BLOCK', 'RUBRIC_ITEM_1', 'ISSUE_NUMBER', 'ISSUE_URL',
+        'WORK_ITEM_TEXT', 'PLANNER_AGENT', 'REVIEWER_AGENT', 'PLANNER_HANDLE',
+        'REVIEWER_HANDLE', 'CONTROLLER'}
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --task)          TASK="$2"; shift 2 ;;
-    --issue)         ISSUE="$2"; shift 2 ;;
-    --run-id)        RUN_ID="$2"; shift 2 ;;
-    --gate)          GATE="$2"; shift 2 ;;
-    --planner)       PLANNER_AGENT="$2"; shift 2 ;;
-    --reviewer)      REVIEWER_AGENT="$2"; shift 2 ;;
-    --mode)          MODE="$2"; shift 2 ;;
-    --base)          BASE_BRANCH="$2"; shift 2 ;;
-    --new-worktree)  NEW_WORKTREE=1; shift ;;
-    --no-reset)      RESET_BRANCH=0; shift ;;
-    --reviewer-terminal) REV="$2"; shift 2 ;;
-    --planner-terminal)  PLN="$2"; shift 2 ;;
-    -h|--help)       usage ;;
-    *) echo "unknown arg: $1" >&2; usage ;;
-  esac
-done
+def fail(message):
+    raise RuntimeError(message)
 
-[[ -n "$RUN_ID" ]] || { echo "--run-id is required" >&2; exit 1; }
-[[ -n "$TASK" || -n "$ISSUE" ]] || { echo "--task or --issue is required" >&2; exit 1; }
-command -v jq >/dev/null || { echo "jq not found" >&2; exit 1; }
-orca status --json >/dev/null 2>&1 || { echo "Orca unreachable. Run: orca open --json" >&2; exit 1; }
 
-TPL_SUFFIX=""; [[ "$MODE" == "orchestration" ]] && TPL_SUFFIX="-orca"
+def command(argv, cwd=None, check=True):
+    result = subprocess.run([str(v) for v in argv], cwd=cwd, text=True,
+                            capture_output=True)
+    if check and result.returncode:
+        fail(f'{argv[0]} {argv[1]} failed: {result.stderr.strip() or result.stdout.strip()}')
+    return result
 
-# Canonical location is prompts/ in the repo root. The other candidates let the
-# script also run from a built/installed skill folder, where templates land in
-# assets/.
-resolve_tpl() {
-  local role="$1" c
-  for c in \
-    "$DUO_HOME/prompts/${role}${TPL_SUFFIX}.md" \
-    "$DUO_HOME/assets/${role}${TPL_SUFFIX}.md" \
-    "$DUO_HOME/dist/agent-duo/assets/${role}${TPL_SUFFIX}.md" ; do
-    [[ -f "$c" ]] && { echo "$c"; return 0; }
-  done
-  return 1
-}
-PLANNER_TPL=$(resolve_tpl planner)  || { echo "planner template not found under DUO_HOME=$DUO_HOME" >&2; exit 1; }
-REVIEWER_TPL=$(resolve_tpl reviewer) || { echo "reviewer template not found under DUO_HOME=$DUO_HOME" >&2; exit 1; }
 
-# ------------------------------------------------------- terminals & paths ---
-if [[ $NEW_WORKTREE -eq 1 ]]; then
-  orca worktree create --name "duo-${RUN_ID}" --agent "$REVIEWER_AGENT" --json >/dev/null
-  sleep 2
-fi
+def git(wt, *args, check=True):
+    return command(['git', '-C', wt, *args], check=check)
 
-TERMS=$(orca terminal list --worktree active --json)
-WT_PATH=$(jq -r '.result.terminals[0].worktreePath' <<<"$TERMS")
 
-# Handles are runtime-scoped, so resolve them fresh unless explicitly pinned.
-if [[ -z "$REV" ]]; then
-  REV=$(jq -r --arg a "$REVIEWER_AGENT" \
-        '.result.terminals[] | select(.preview // "" | ascii_downcase | contains($a)) | .handle' \
-        <<<"$TERMS" | head -1)
-fi
-if [[ -z "$PLN" ]]; then
-  PLN=$(jq -r --arg r "$REV" '.result.terminals[] | select(.handle != $r) | .handle' \
-        <<<"$TERMS" | head -1)
-fi
-[[ -n "$REV" && -n "$PLN" && "$REV" != "$PLN" ]] || {
-  echo "Could not resolve two distinct terminals. Pass --reviewer-terminal / --planner-terminal." >&2
-  jq -r '.result.terminals[] | "  \(.handle)  \(.title)"' <<<"$TERMS" >&2
-  exit 1
-}
+def orca(*args):
+    result = command([ORCA, *args, '--json'])
+    data = json.loads(result.stdout)
+    if data.get('ok') is not True:
+        fail(f'Orca {args[0]} failed: {data.get("error", data)}')
+    return data['result']
 
-RUN_DIR="${WT_PATH}/${RUNS_ROOT}/${RUN_ID}"
-[[ -e "$RUN_DIR" ]] && { echo "run folder already exists: $RUN_DIR" >&2; exit 1; }
-mkdir -p "$RUN_DIR"
 
-# A worktree carries the branch it was created on. Without a reset, a new run
-# stacks on top of the previous run's feature branch and its PR inherits it.
-if [[ $RESET_BRANCH -eq 1 ]]; then
-  git -C "$WT_PATH" checkout "$BASE_BRANCH" --quiet 2>/dev/null
-  git -C "$WT_PATH" pull --quiet >/dev/null 2>&1 || true
-fi
+def validate_template(source, role, mode, origin, recovery):
+    marker = f'<!-- agent-duo: protocol={PROTOCOL_VERSION} role={role} transport={mode} -->'
+    lines = source.splitlines()
+    if (len(lines) < 2 or lines[1] != marker or '{{CONTROLLER}}' not in source
+            or re.findall(r'<!--\s*agent-duo:.*?-->', source, re.S) != [marker]):
+        fail(f'Incompatible {role} template at {origin}; expected protocol {PROTOCOL_VERSION}, '
+             f'role {role}, transport {mode}, and {{{{CONTROLLER}}}}. {recovery}')
+    text = re.sub(r'<!--.*?-->', '', source, flags=re.S)
+    unknown = set(TOKEN.findall(text)) - KEYS
+    if unknown:
+        fail(f'Unknown template placeholders in {origin}: {", ".join(sorted(unknown))}. {recovery}')
 
-# -------------------------------------------------------------- templating ---
-if [[ -n "$ISSUE" ]]; then
-  ISSUE_NUMBER="${ISSUE##*/}"
-  WORK_ITEM_BLOCK="Your work item is GitHub issue #${ISSUE_NUMBER}: ${ISSUE}
-Read it fully before speccing. It is the source of truth."
-  SOURCE_BLOCK="The work item is GitHub issue #${ISSUE_NUMBER}: ${ISSUE}. Read it before your first review."
-  RUBRIC_1="Does the plan address every acceptance criterion of issue #${ISSUE_NUMBER}?"
-else
-  ISSUE_NUMBER="n/a"
-  WORK_ITEM_BLOCK="Your work item is the following brief. As your FIRST action, write it
-verbatim into brief.md (type: brief, round: 0) in the run folder; it is the
-source of truth.
---- BRIEF START ---
-${TASK}
---- BRIEF END ---"
-  SOURCE_BLOCK="The work item is brief.md in the run folder, written by the planner. Read it before your first review."
-  RUBRIC_1="Are the derived acceptance criteria a faithful, complete reading of brief.md, and does the plan address all of them?"
-fi
 
-fill() {  # fill <template> <output>
-  RUN_ID="$RUN_ID" RUNS_ROOT="${WT_PATH}/${RUNS_ROOT}/" GATE="$GATE" \
-  WORK_ITEM_BLOCK="$WORK_ITEM_BLOCK" SOURCE_BLOCK="$SOURCE_BLOCK" \
-  RUBRIC_1="$RUBRIC_1" ISSUE_NUMBER="$ISSUE_NUMBER" ISSUE="$ISSUE" \
-  TASK="$TASK" PLANNER_AGENT="$PLANNER_AGENT" REVIEWER_AGENT="$REVIEWER_AGENT" \
-  python3 - "$1" "$2" <<'PY'
-import os, re, sys
-src, dst = sys.argv[1], sys.argv[2]
-t = open(src).read()
-# Drop the human-facing variant comments; the script supplies the real block.
-t = re.sub(r'<!--.*?-->', '', t, flags=re.S)
-m = {
-  '{{RUN_ID}}': os.environ['RUN_ID'],
-  '{{RUNS_ROOT}}': os.environ['RUNS_ROOT'],
-  '{{GATE_COMMANDS}}': os.environ['GATE'],
-  '{{WORK_ITEM_BLOCK}}': os.environ['WORK_ITEM_BLOCK'],
-  '{{SOURCE_OF_TRUTH_BLOCK}}': os.environ['SOURCE_BLOCK'],
-  '{{RUBRIC_ITEM_1}}': os.environ['RUBRIC_1'],
-  '{{ISSUE_NUMBER}}': os.environ['ISSUE_NUMBER'],
-  '{{ISSUE_URL}}': os.environ['ISSUE'],
-  '{{WORK_ITEM_TEXT}}': os.environ['TASK'],
-  '{{PLANNER_AGENT}}': os.environ['PLANNER_AGENT'],
-  '{{REVIEWER_AGENT}}': os.environ['REVIEWER_AGENT'],
-}
-for k, v in m.items():
-    t = t.replace(k, v)
-t = re.sub(r'\n{3,}', '\n\n', t)
-open(dst, 'w').write(t)
-left = set(re.findall(r'\{\{[A-Z_]+\}\}', t)) - {'{{PLANNER_HANDLE}}', '{{REVIEWER_HANDLE}}'}
-if left:
-    sys.exit("unfilled placeholders in %s: %s" % (dst, ', '.join(sorted(left))))
+def template_hashes(originals):
+    return {role: hashlib.sha256(source.encode('utf-8')).hexdigest()
+            for role, source in originals.items()}
+
+
+def templates(home, mode):
+    suffix = '-orca' if mode == 'orchestration' else ''
+    found = {}
+    for role in ('planner', 'reviewer'):
+        paths = [home / 'skill/assets', home / 'assets', home]
+        path = next((p / f'{role}{suffix}.md' for p in paths
+                     if (p / f'{role}{suffix}.md').is_file()), None)
+        if path is None:
+            fail(f'{role} template not found under DUO_HOME={home}. Reinstall the complete skill, including its templates.')
+        source = path.read_bytes().decode('utf-8')
+        validate_template(source, role, mode, path, 'Reinstall the complete skill, including its templates.')
+        found[role] = source
+    return found
+
+
+def validate_snapshot(saved):
+    recovery = 'Reinstall the complete skill and start a new compatible run with a new --run-id; preserve this run for reference.'
+    if (not isinstance(saved, dict) or saved.get('protocol_version') != PROTOCOL_VERSION
+            or saved.get('mode') not in ('file', 'orchestration')):
+        fail(f'Saved run has missing or incompatible protocol metadata. {recovery}')
+    originals = saved.get('templates')
+    hashes = saved.get('template_sha256')
+    controller_hashes = saved.get('controller_sha256')
+    if (not isinstance(originals, dict) or set(originals) != {'planner', 'reviewer'}
+            or not all(isinstance(source, str) for source in originals.values())
+            or hashes != template_hashes(originals)
+            or not isinstance(controller_hashes, dict)
+            or not all(isinstance(controller_hashes.get(key), str)
+                       and re.fullmatch(r'[0-9a-f]{64}', controller_hashes[key])
+                       for key in ('initial', 'current'))):
+        fail(f'Saved run template snapshot or provenance is missing or altered. {recovery}')
+    for role, source in originals.items():
+        validate_template(source, role, saved['mode'], 'launcher.json', recovery)
+
+
+def controller_protocol():
+    result = command([sys.executable, CONTROLLER, 'protocol'], check=False)
+    try:
+        info = json.loads(result.stdout)
+    except ValueError:
+        info = None
+    if (result.returncode or not isinstance(info, dict)
+            or info.get('protocol_version') != PROTOCOL_VERSION):
+        fail(f'Controller {CONTROLLER} is incompatible with protocol {PROTOCOL_VERSION}. '
+             'Reinstall the complete skill, including its controller and templates.')
+    return hashlib.sha256(CONTROLLER.read_bytes()).hexdigest()
+
+
+def terminals(selector, wt):
+    result = orca('terminal', 'list', '--worktree', selector)
+    if result.get('truncated'):
+        fail('Terminal list is truncated; narrow the worktree or close unused sessions.')
+    return [t for t in result['terminals']
+            if Path(t.get('worktreePath', '')).resolve() == wt]
+
+
+def select_terminal(terms, agent, explicit, role):
+    eligible = [t for t in terms if t.get('agentIdentity') == agent
+                and t.get('connected') is True and t.get('writable') is True
+                and not t.get('orphaned')]
+    if explicit:
+        eligible = [t for t in eligible if t['handle'] == explicit]
+    if len(eligible) != 1:
+        fail(f'Cannot identify one connected {agent} {role} terminal in this worktree. '
+             f'Pass --{role}-terminal with a verified agent handle; shells are not agents.')
+    return eligible[0]['handle']
+
+
+def check_clean(wt):
+    dirty = git(wt, 'status', '--porcelain', '--untracked-files=normal', '--', '.',
+                f':(exclude){RUNS_ROOT}').stdout.strip()
+    if dirty:
+        fail('Worktree has uncommitted changes; commit or stash them before starting a run.\n' + dirty)
+    for name in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply'):
+        path = Path(git(wt, 'rev-parse', '--git-path', name).stdout.strip())
+        if not path.is_absolute():
+            path = wt / path
+        if path.exists():
+            fail(f'Finish the existing Git operation ({name}) before starting a run.')
+
+
+def base_commit(wt, explicit):
+    # Fetch updates remote refs only: no hidden merge/rebase in the user's checkout.
+    if explicit:
+        ref = explicit
+        if ref.startswith('-'):
+            fail('--base must be a Git ref, not an option.')
+        git(wt, 'rev-parse', '--verify', f'{ref}^{{commit}}')
+    else:
+        ref = git(wt, 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD', check=False).stdout.strip()
+        ref = ref or 'HEAD'
+    if ref.startswith('refs/remotes/'):
+        remote = ref.split('/')[2]
+        git(wt, 'fetch', '--quiet', remote)
+    elif explicit and '/' in ref and ref.split('/')[0] in git(wt, 'remote').stdout.splitlines():
+        git(wt, 'fetch', '--quiet', ref.split('/')[0])
+    return git(wt, 'rev-parse', '--verify', f'{ref}^{{commit}}').stdout.strip()
+
+
+def render(originals, values):
+    # Match only the original templates. Inserted values are never reparsed.
+    return {role: TOKEN.sub(lambda match: values[match.group(1)],
+                           re.sub(r'<!--.*?-->', '', source, flags=re.S))
+            for role, source in originals.items()}
+
+
+def save_json(path, value):
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+
+def run_path(wt, run_id):
+    path = wt / RUNS_ROOT / run_id
+    if wt not in path.resolve().parents:
+        fail('Run directory must remain inside its worktree; check artifact symlinks.')
+    return path
+
+
+def controller(action, run, args):
+    command([sys.executable, CONTROLLER, action, '--run-dir', run, *args])
+
+
+def main():
+    global ORCA, CONTROLLER
+    parser = argparse.ArgumentParser(prog='duo', description='Start or resume two verified agents in one worktree.')
+    parser.add_argument('--run-id', required=True)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--task')
+    source.add_argument('--issue')
+    parser.add_argument('--gate')
+    parser.add_argument('--planner', choices=('claude', 'codex'))
+    parser.add_argument('--reviewer', choices=('claude', 'codex'))
+    parser.add_argument('--mode', choices=('orchestration', 'file'))
+    parser.add_argument('--base')
+    parser.add_argument('--new-worktree', action='store_true')
+    parser.add_argument('--no-reset', action='store_true')
+    parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--reviewer-terminal')
+    parser.add_argument('--planner-terminal')
+    args = parser.parse_args(sys.argv[2:])
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', args.run_id):
+        parser.error('--run-id must be 1–64 letters, digits, underscores or hyphens, starting with a letter or digit.')
+    if args.resume:
+        if any((args.task is not None, args.issue, args.base, args.new_worktree, args.no_reset,
+                args.mode, args.gate is not None, args.planner, args.reviewer)):
+            parser.error('--resume uses saved parameters; supply only --run-id and optional terminal handles.')
+    elif not args.task and not args.issue:
+        parser.error('--task or --issue is required for a new run.')
+    if not args.resume:
+        gate = args.gate if args.gate is not None else os.environ.get('DUO_GATE')
+        if gate is None or not gate.strip():
+            parser.error('Provide a nonempty --gate command or DUO_GATE for a new run.')
+    if args.no_reset and (args.base or args.new_worktree):
+        parser.error('--no-reset cannot be combined with --base or --new-worktree.')
+    if args.new_worktree and (args.reviewer_terminal or args.planner_terminal):
+        parser.error('--new-worktree creates its own agent terminals; omit terminal overrides.')
+    if args.issue and not re.fullmatch(r'https://[^/\s]+/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*', args.issue):
+        parser.error('--issue must be an HTTPS GitHub issue URL ending in /issues/NUMBER.')
+    if args.base and args.base.startswith('-'):
+        parser.error('--base must be a Git ref, not an option.')
+
+    home = Path(os.environ['DUO_HOME']).expanduser().resolve() if os.environ.get('DUO_HOME') else SCRIPT.parent.parent
+    CONTROLLER = SCRIPT.with_name('duo-state.py')
+    if not CONTROLLER.is_file():
+        fail(f'Controller is missing: {CONTROLLER}. Reinstall the complete skill.')
+    current_controller_hash = controller_protocol()
+    ORCA = os.environ.get('ORCA_CLI_COMMAND') or ('orca-dev' if os.environ.get('ORCA_DEV_REPO_ROOT') else 'orca-ide' if sys.platform.startswith('linux') else 'orca')
+    wt = Path(git(Path.cwd(), 'rev-parse', '--show-toplevel').stdout.strip()).resolve()
+    selector = f'path:{wt}'
+    run = run_path(wt, args.run_id)
+    if args.resume:
+        try:
+            saved = json.loads((run / 'launcher.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            fail('Saved launcher snapshot is missing or unreadable. Reinstall the complete skill '
+                 'and start a new compatible run with a new --run-id; preserve this run for reference.')
+        validate_snapshot(saved)
+        if Path(saved['worktree']).resolve() != wt:
+            fail('Saved run belongs to a different worktree.')
+        originals, values = saved['templates'], saved['values']
+        mode = saved['mode']
+        initial_controller_hash = saved['controller_sha256']['initial']
+        planner_agent, reviewer_agent = values['PLANNER_AGENT'], values['REVIEWER_AGENT']
+    else:
+        planner_agent, reviewer_agent = args.planner or 'claude', args.reviewer or 'codex'
+        mode = args.mode or 'orchestration'
+        originals = templates(home, mode)
+        initial_controller_hash = current_controller_hash
+        values = {}
+        if not args.new_worktree and run.exists():
+            fail(f'Run folder already exists: {run}; use --resume --run-id {args.run_id}.')
+        check_clean(wt)
+
+    orca('status')
+    commit = None
+    if not args.resume and not args.no_reset:
+        commit = base_commit(wt, args.base)
+    rev, pln = args.reviewer_terminal, args.planner_terminal
+    if args.new_worktree:
+        created = orca('worktree', 'create', '--name', f'duo-{args.run_id}', '--no-parent',
+                       '--base-branch', commit, '--agent', reviewer_agent)
+        identity = created['worktree']['id']
+        if '::' not in identity or not Path(identity.split('::', 1)[1]).is_absolute():
+            fail('Orca returned an invalid compound worktree ID.')
+        wt = Path(identity.split('::', 1)[1]).resolve()
+        selector = 'id:' + identity
+        run = run_path(wt, args.run_id)
+        if run.exists():
+            fail(f'Run folder already exists: {run}')
+        rev = created.get('agentTerminalHandle') or (created.get('startupTerminal') or {}).get('handle')
+        made = orca('terminal', 'create', '--worktree', selector, '--command', planner_agent,
+                    '--title', f'duo-{args.run_id}-planner')
+        pln = made['terminal']['handle']
+        # A newly created TUI must be ready before agentIdentity can be verified.
+        for handle in (rev, pln):
+            if handle:
+                orca('terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', '180000')
+        check_clean(wt)
+    terms = terminals(selector, wt)
+    rev = select_terminal(terms, reviewer_agent, rev, 'reviewer')
+    pln = select_terminal(terms, planner_agent, pln, 'planner')
+    if rev == pln:
+        fail('Planner and reviewer must use two distinct terminals.')
+    if not args.new_worktree:
+        orca('terminal', 'wait', '--terminal', rev, '--for', 'tui-idle', '--timeout-ms', '180000')
+
+    if not args.resume:
+        issue_number = args.issue.rsplit('/', 1)[1] if args.issue else 'n/a'
+        brief = args.task if args.task is not None else f'GitHub issue #{issue_number}: {args.issue}\nRead the issue in full; it is the source of truth.\n'
+        if args.issue:
+            block = f'Your work item is GitHub issue #{issue_number}: {args.issue}. Read it fully before speccing.'
+            source_block = block
+        else:
+            block = ('The launcher saved the following brief verbatim in brief.md. Read it; do not rewrite it.\n'
+                     '--- BRIEF START ---\n' + brief + '\n--- BRIEF END ---')
+            source_block = 'The source of truth is the existing brief.md in the run folder, saved by the launcher. Read it before review.'
+        values = dict(RUN_ID=args.run_id, RUNS_ROOT=str(wt / RUNS_ROOT) + '/',
+                      GATE_COMMANDS=gate, WORK_ITEM_BLOCK=block,
+                      SOURCE_OF_TRUTH_BLOCK=source_block,
+                      RUBRIC_ITEM_1='Does the plan address every acceptance criterion of the approved spec?',
+                      ISSUE_NUMBER=issue_number, ISSUE_URL=args.issue or '', WORK_ITEM_TEXT=brief,
+                      PLANNER_AGENT=planner_agent, REVIEWER_AGENT=reviewer_agent)
+    values.update(PLANNER_HANDLE=pln, REVIEWER_HANDLE=rev, CONTROLLER=str(CONTROLLER))
+    prompts = render(originals, values)
+    saved = dict(worktree=str(wt), templates=originals, values=values,
+                 protocol_version=PROTOCOL_VERSION, mode=mode,
+                 template_sha256=template_hashes(originals),
+                 controller_sha256=dict(initial=initial_controller_hash, current=current_controller_hash))
+    runs = wt / RUNS_ROOT
+    runs.mkdir(parents=True, exist_ok=True)
+    lock = runs / f'.{args.run_id}.launch-lock'
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        fail(f'Another launcher holds {lock}; check that process before removing its lock.')
+    os.close(fd)
+    stage = None
+    try:
+        if args.resume:
+            controller('resume', run, ['--reviewer', rev])
+            # Keep accepted artifacts and state. Only runtime prompt addresses change.
+            for role, text in prompts.items():
+                tmp = run / f'.{role}.resolved.tmp'
+                tmp.write_text(text, encoding='utf-8')
+                tmp.replace(run / f'{role}.resolved.txt')
+            save_json(run / 'launcher.json', saved)
+        else:
+            if run.exists():
+                fail(f'Run folder already exists: {run}')
+            stage = Path(tempfile.mkdtemp(prefix=f'.{args.run_id}.', dir=runs))
+            for role, text in prompts.items():
+                (stage / f'{role}.resolved.txt').write_text(text, encoding='utf-8')
+            save_json(stage / 'launcher.json', saved)
+            (stage / 'brief.md').write_bytes((f'---\nrun_id: {args.run_id}\ntype: brief\nround: 0\n---\n').encode() + brief.encode('utf-8'))
+            previous = None
+            if not args.new_worktree and not args.no_reset:
+                previous = git(wt, 'symbolic-ref', '--quiet', '--short', 'HEAD', check=False).stdout.strip()
+                previous_sha = git(wt, 'rev-parse', 'HEAD').stdout.strip()
+                git(wt, 'switch', '--quiet', '-c', f'duo/{args.run_id}', commit)
+            stage.rename(run)
+            stage = None
+            try:
+                controller('init', run, ['--run-id', args.run_id, '--worktree', wt,
+                                       '--gate', values['GATE_COMMANDS'], '--reviewer', rev])
+            except Exception:
+                shutil.rmtree(run)
+                if previous is not None:
+                    restore = ['switch', '--quiet', previous] if previous else ['switch', '--quiet', '--detach', previous_sha]
+                    git(wt, *restore)
+                    git(wt, 'branch', '-D', f'duo/{args.run_id}')
+                raise
+        # Reused planner can be executing /agent-duo itself: queue its prompt.
+        # Durable state queues reviews while the reviewer starts. Its worker loop
+        # waits for the planner, so waiting for reviewer idle here would deadlock.
+        orca('terminal', 'send', '--terminal', rev, '--text', prompts['reviewer'], '--enter')
+        orca('terminal', 'send', '--terminal', pln, '--text', prompts['planner'], '--enter')
+    finally:
+        if stage is not None:
+            shutil.rmtree(stage)
+        lock.unlink()
+    print(f"duo run '{args.run_id}' {'resumed' if args.resume else 'started'}\n"
+          f'  worktree: {wt}\n  branch: {git(wt, "branch", "--show-current").stdout.strip()}\n'
+          f'  planner: {planner_agent} {pln}\n  reviewer: {reviewer_agent} {rev}\n  run dir: {run}')
+
+
+try:
+    main()
+except (RuntimeError, OSError, ValueError, KeyError) as error:
+    print(f'duo: {error}', file=sys.stderr)
+    sys.exit(1)
 PY
-}
-
-fill "$PLANNER_TPL"  "$RUN_DIR/planner.txt"
-fill "$REVIEWER_TPL" "$RUN_DIR/reviewer.txt"
-
-# Handles only exist once the terminals do, so they are substituted last.
-sed "s|{{PLANNER_HANDLE}}|${PLN}|g"  "$RUN_DIR/reviewer.txt" > "$RUN_DIR/reviewer.resolved.txt"
-sed "s|{{REVIEWER_HANDLE}}|${REV}|g" "$RUN_DIR/planner.txt"  > "$RUN_DIR/planner.resolved.txt"
-
-# ------------------------------------------------------------------ launch ---
-# Reviewer first: the coordinator cannot dispatch to an agent that is not up.
-orca terminal send --terminal "$REV" --text "$(cat "$RUN_DIR/reviewer.resolved.txt")" --enter --json >/dev/null
-orca terminal wait --terminal "$REV" --for tui-idle --timeout-ms 180000 --json >/dev/null
-orca terminal send --terminal "$PLN" --text "$(cat "$RUN_DIR/planner.resolved.txt")" --enter --json >/dev/null
-
-cat <<EOF
-
-duo run '${RUN_ID}' started (${MODE} mode)
-  worktree : ${WT_PATH}
-  branch   : $(git -C "$WT_PATH" rev-parse --abbrev-ref HEAD)
-  planner  : ${PLANNER_AGENT}  ${PLN}
-  reviewer : ${REVIEWER_AGENT}  ${REV}
-  run dir  : ${RUN_DIR}
-
-watch:
-  orca orchestration task-list --json | jq '.result.tasks[] | select(.task_title | contains("run ${RUN_ID}"))'
-  tail -f ${RUN_DIR}/log-planner.md ${RUN_DIR}/log-reviewer.md
-EOF
