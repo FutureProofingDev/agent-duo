@@ -50,13 +50,17 @@ or reviewer preference is not a lesson. The reviewer supplies substantive eviden
 of the finding and its resolution; checking path existence cannot establish that
 the reasoning is true. Generalize the behavior, avoiding specific symbols/tables.
 
-After controller acceptance of the final PR review, the planner calls:
+After controller acceptance of the final PR review, the planner publishes its
+verdict and pending manual checks, then finalizes the run:
 
 ```bash
+python3 /absolute/path/duo-state.py publish-review --run-dir /absolute/run/directory --repo OWNER/NAME
 python3 /absolute/path/duo-state.py finalize --run-dir /absolute/run/directory --lessons /absolute/run/directory/lessons-proposals.json
 ```
 
-The controller validates and persists proposals, records this completed run once,
+New protocol-2 runs require a recorded verdict publication before finalization.
+The publication command uses an authorized gh CLI session; storing memory itself
+remains local. The controller validates and persists proposals, records this completed run once,
 and only then marks it completed. A retry is idempotent. Both agents wait for that
 state instead of stopping when a GitHub comment appears. Escalated or stopped runs
 may preserve proposals for inspection, but do not count as completed observations.

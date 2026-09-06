@@ -11,7 +11,8 @@ worktree and retain the run directory after an Orca restart.
 | Current phase/request and accepted result | `duo-state.py status` |
 | Source hash, reviewer identity, round/retry limits | controller |
 | Review content and five evidence sections | reviewer, validated by controller |
-| Gate and commit match | controller; remote PR SHA verified by reviewer |
+| Gate and commit match | controller; reviewer checks remote PR SHA and publication rechecks it |
+| Published verdict and comment URL | controller `publish-review` |
 | Terminal handles and task/dispatch IDs | current Orca runtime |
 | Wakeups and human-facing task activity | Orca messages |
 
@@ -59,7 +60,9 @@ Empty waits are not progress; controller time budgets remain in force.
 ## Restart and human escalation
 
 Use `duo --resume --run-id ID` to reacquire validated terminals and replay saved
-resolved prompts. The launcher calls controller `resume`; after escalation a
+resolved prompts only after protocol/version/token/hash preflight. A legacy or
+incompatible snapshot needs a new run with imported, revalidated evidence; do not
+rewrite the old artifacts to pass validation. The launcher calls controller `resume`; after escalation a
 human-approved `resume --reason "<ruling>"` is required first. Never reset the Git
 branch or create fresh run state just to resume a pending review.
 
@@ -74,5 +77,8 @@ create human authority; a timed-out question does not authorize continuation.
 Keep the human ruling in the durable resume record.
 
 Before the final approved PR review is accepted, the reviewer publishes learning
-proposals. The planner finalizes them through the controller and both stop only
-when controller state is completed. See [learning.md](learning.md).
+proposals. After acceptance, the planner calls `publish-review --repo OWNER/NAME`
+to publish the SHA-specific five-section verdict and pending manual checks. An
+uncertain publication can be retried idempotently even if its Orca notification
+was lost. The planner then finalizes through the controller; both stop only when
+state is completed with recorded verdict publication. See [learning.md](learning.md).

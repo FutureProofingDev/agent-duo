@@ -2,6 +2,7 @@
 import fcntl
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +10,8 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
+import github_fixture
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'bin' / 'duo-state.py'
 MEMORY_REF = 'refs/agent-duo/learning'
@@ -50,7 +53,7 @@ class Run:
         (self.path / name).write_text(text)
 
     def approve(self, source, **fields):
-        self.artifact(source, dict(run_id=self.run_id, **fields), 'Reviewable evidence.\n')
+        self.artifact(source, dict(run_id=self.run_id, **fields), 'https://github.com/example/project/pull/123\n' if fields['type'] == 'pr-request' else 'Reviewable evidence.\n')
         pending = self.cli('request', '--source', source)['pending']
         review = dict(run_id=self.run_id, type='review', round=pending['round'],
                       source=source, source_sha256=pending['source_sha256'],
@@ -59,8 +62,10 @@ class Run:
             review['head_sha'] = pending['head_sha']
         name = 'cr-' + source
         self.artifact(name, review, ''.join(f'## {number}. Criterion\nEvidence checked.\n'
-                                          for number in range(1, 6)))
+                                          for number in range(1, 6)) + '\n## Pending manual checks\nNone.\n')
         self.cli('accept', '--review', name)
+        if pending['kind'] == 'pr':
+            self.cli('publish-review', '--repo', 'example/project')
 
     def proposals(self, values):
         path = self.path / 'lessons-proposals.json'
@@ -83,6 +88,9 @@ class LearningTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
+        environment = patch.dict(os.environ, github_fixture.environment(self.directory))
+        environment.start()
+        self.addCleanup(environment.stop)
         self.repo = self.directory / 'repo'
         self.repo.mkdir()
         self.git(self.repo, 'init', '-q')

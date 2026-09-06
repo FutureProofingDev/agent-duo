@@ -6,6 +6,7 @@
 set -euo pipefail
 exec python3 - "$0" "$@" <<'PY'
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import sys
 import tempfile
 
 SCRIPT = Path(sys.argv[1]).resolve()
+PROTOCOL_VERSION = 2
 RUNS_ROOT = Path('docs/agent-duo/runs')
 TOKEN = re.compile(r'\{\{([A-Z_]+)\}\}')
 KEYS = {'RUN_ID', 'RUNS_ROOT', 'GATE_COMMANDS', 'WORK_ITEM_BLOCK',
@@ -48,6 +50,24 @@ def orca(*args):
     return data['result']
 
 
+def validate_template(source, role, mode, origin, recovery):
+    marker = f'<!-- agent-duo: protocol={PROTOCOL_VERSION} role={role} transport={mode} -->'
+    lines = source.splitlines()
+    if (len(lines) < 2 or lines[1] != marker or '{{CONTROLLER}}' not in source
+            or re.findall(r'<!--\s*agent-duo:.*?-->', source, re.S) != [marker]):
+        fail(f'Incompatible {role} template at {origin}; expected protocol {PROTOCOL_VERSION}, '
+             f'role {role}, transport {mode}, and {{{{CONTROLLER}}}}. {recovery}')
+    text = re.sub(r'<!--.*?-->', '', source, flags=re.S)
+    unknown = set(TOKEN.findall(text)) - KEYS
+    if unknown:
+        fail(f'Unknown template placeholders in {origin}: {", ".join(sorted(unknown))}. {recovery}')
+
+
+def template_hashes(originals):
+    return {role: hashlib.sha256(source.encode('utf-8')).hexdigest()
+            for role, source in originals.items()}
+
+
 def templates(home, mode):
     suffix = '-orca' if mode == 'orchestration' else ''
     found = {}
@@ -56,13 +76,44 @@ def templates(home, mode):
         path = next((p / f'{role}{suffix}.md' for p in paths
                      if (p / f'{role}{suffix}.md').is_file()), None)
         if path is None:
-            fail(f'{role} template not found under DUO_HOME={home}')
-        text = re.sub(r'<!--.*?-->', '', path.read_text(encoding='utf-8'), flags=re.S)
-        unknown = set(TOKEN.findall(text)) - KEYS
-        if unknown:
-            fail(f'Unknown template placeholders in {path}: {", ".join(sorted(unknown))}')
-        found[role] = text
+            fail(f'{role} template not found under DUO_HOME={home}. Reinstall the complete skill, including its templates.')
+        source = path.read_bytes().decode('utf-8')
+        validate_template(source, role, mode, path, 'Reinstall the complete skill, including its templates.')
+        found[role] = source
     return found
+
+
+def validate_snapshot(saved):
+    recovery = 'Reinstall the complete skill and start a new compatible run with a new --run-id; preserve this run for reference.'
+    if (not isinstance(saved, dict) or saved.get('protocol_version') != PROTOCOL_VERSION
+            or saved.get('mode') not in ('file', 'orchestration')):
+        fail(f'Saved run has missing or incompatible protocol metadata. {recovery}')
+    originals = saved.get('templates')
+    hashes = saved.get('template_sha256')
+    controller_hashes = saved.get('controller_sha256')
+    if (not isinstance(originals, dict) or set(originals) != {'planner', 'reviewer'}
+            or not all(isinstance(source, str) for source in originals.values())
+            or hashes != template_hashes(originals)
+            or not isinstance(controller_hashes, dict)
+            or not all(isinstance(controller_hashes.get(key), str)
+                       and re.fullmatch(r'[0-9a-f]{64}', controller_hashes[key])
+                       for key in ('initial', 'current'))):
+        fail(f'Saved run template snapshot or provenance is missing or altered. {recovery}')
+    for role, source in originals.items():
+        validate_template(source, role, saved['mode'], 'launcher.json', recovery)
+
+
+def controller_protocol():
+    result = command([sys.executable, CONTROLLER, 'protocol'], check=False)
+    try:
+        info = json.loads(result.stdout)
+    except ValueError:
+        info = None
+    if (result.returncode or not isinstance(info, dict)
+            or info.get('protocol_version') != PROTOCOL_VERSION):
+        fail(f'Controller {CONTROLLER} is incompatible with protocol {PROTOCOL_VERSION}. '
+             'Reinstall the complete skill, including its controller and templates.')
+    return hashlib.sha256(CONTROLLER.read_bytes()).hexdigest()
 
 
 def terminals(selector, wt):
@@ -118,8 +169,9 @@ def base_commit(wt, explicit):
 
 def render(originals, values):
     # Match only the original templates. Inserted values are never reparsed.
-    return {role: TOKEN.sub(lambda match: values[match.group(1)], text)
-            for role, text in originals.items()}
+    return {role: TOKEN.sub(lambda match: values[match.group(1)],
+                           re.sub(r'<!--.*?-->', '', source, flags=re.S))
+            for role, source in originals.items()}
 
 
 def save_json(path, value):
@@ -180,19 +232,29 @@ def main():
     CONTROLLER = SCRIPT.with_name('duo-state.py')
     if not CONTROLLER.is_file():
         fail(f'Controller is missing: {CONTROLLER}. Reinstall the complete skill.')
+    current_controller_hash = controller_protocol()
     ORCA = os.environ.get('ORCA_CLI_COMMAND') or ('orca-dev' if os.environ.get('ORCA_DEV_REPO_ROOT') else 'orca-ide' if sys.platform.startswith('linux') else 'orca')
     wt = Path(git(Path.cwd(), 'rev-parse', '--show-toplevel').stdout.strip()).resolve()
     selector = f'path:{wt}'
     run = run_path(wt, args.run_id)
     if args.resume:
-        saved = json.loads((run / 'launcher.json').read_text(encoding='utf-8'))
+        try:
+            saved = json.loads((run / 'launcher.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            fail('Saved launcher snapshot is missing or unreadable. Reinstall the complete skill '
+                 'and start a new compatible run with a new --run-id; preserve this run for reference.')
+        validate_snapshot(saved)
         if Path(saved['worktree']).resolve() != wt:
             fail('Saved run belongs to a different worktree.')
         originals, values = saved['templates'], saved['values']
+        mode = saved['mode']
+        initial_controller_hash = saved['controller_sha256']['initial']
         planner_agent, reviewer_agent = values['PLANNER_AGENT'], values['REVIEWER_AGENT']
     else:
         planner_agent, reviewer_agent = args.planner or 'claude', args.reviewer or 'codex'
-        originals = templates(home, args.mode or 'orchestration')
+        mode = args.mode or 'orchestration'
+        originals = templates(home, mode)
+        initial_controller_hash = current_controller_hash
         values = {}
         if not args.new_worktree and run.exists():
             fail(f'Run folder already exists: {run}; use --resume --run-id {args.run_id}.')
@@ -249,7 +311,10 @@ def main():
                       PLANNER_AGENT=planner_agent, REVIEWER_AGENT=reviewer_agent)
     values.update(PLANNER_HANDLE=pln, REVIEWER_HANDLE=rev, CONTROLLER=str(CONTROLLER))
     prompts = render(originals, values)
-    saved = dict(worktree=str(wt), templates=originals, values=values)
+    saved = dict(worktree=str(wt), templates=originals, values=values,
+                 protocol_version=PROTOCOL_VERSION, mode=mode,
+                 template_sha256=template_hashes(originals),
+                 controller_sha256=dict(initial=initial_controller_hash, current=current_controller_hash))
     runs = wt / RUNS_ROOT
     runs.mkdir(parents=True, exist_ok=True)
     lock = runs / f'.{args.run_id}.launch-lock'

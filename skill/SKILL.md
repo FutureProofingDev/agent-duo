@@ -6,9 +6,11 @@ description: Set up a paired planner/executor and reviewer workflow for a GitHub
 # Agent Duo
 
 Two agents take a work item through reviewed spec, reviewed plan, implementation,
-checks, exact-commit PR review and durable finalization. The agents supply technical
+checks, exact-commit PR review, published verdict and durable finalization. The agents supply technical
 judgment; `duo-state.py` controls the transitions. Brainstorming remains outside
-this workflow and can provide its initial brief.
+this workflow and can provide its initial brief. Unless explicitly asked for
+planning only, continue after plan approval through implementation and published
+PR review. Do not infer a planning-only restriction from the word "plan".
 
 ## Inputs and defaults
 
@@ -26,7 +28,8 @@ work or a gate command; do not generate a runnable prompt containing a fake gate
   `DUO_GATE`, passed through `--gate` when needed. No placeholder is a valid gate.
 - Transport: the launcher defaults to `orchestration` in Orca. Use `file` for
   manual portable sessions or when explicitly chosen. Both require macOS/Linux,
-  Python 3.9+ and Git.
+  Python 3.9+ and Git. Final verdict publication additionally needs an authorized
+  gh CLI session with permission to read the PR and write its comment.
 - Run folder root: `docs/agent-duo/runs/`, resolved within the run worktree.
 
 A brief is captured verbatim by the launcher in brief.md. In manual setup create
@@ -38,6 +41,8 @@ checks that the derived criteria faithfully cover the source without invented sc
 In a checkout use `bin/duo.sh`; in the installed built skill use `assets/duo.sh`.
 Both use the same canonical prompt assets and packaged controller. Locate the
 actual executable before invoking it; do not assume the skill is a repository.
+Install one complete bundle: `duo-state.py protocol` reports protocol_version 2,
+and every canonical template keeps its exact line-2 protocol/role/transport marker.
 
 ```bash
 /path/to/duo.sh --task 'Hide signup on the login page' --run-id login-a --gate 'pnpm test:run && pnpm lint'
@@ -45,8 +50,11 @@ actual executable before invoking it; do not assume the skill is a repository.
 /path/to/duo.sh --resume --run-id login-a
 ```
 
-The launcher performs preflight, initializes the durable controller, resolves exact
-worktree/agent identities, fills prompts once and saves resolved prompts. It does
+The launcher performs protocol/version/token/hash preflight, initializes the
+durable controller, resolves exact worktree/agent identities, fills prompts once
+and saves resolved prompts with hashes. Incompatible legacy resume snapshots are
+rejected. Initialize a new run, import old approved artifacts as references and
+revalidate; do not rewrite historical evidence to make it look current. It does
 not use terminal titles/previews to guess the receiving agent. Ambiguity requires
 explicit `--planner-terminal` / `--reviewer-terminal` handles. Failed preflight must
 not send a prompt or erase existing work. See [references/orca.md](references/orca.md)
@@ -58,7 +66,8 @@ for branch behavior, flags and resume.
    [references/orchestration.md](references/orchestration.md).
 2. Resolve one dedicated worktree and absolute run/controller paths. The controller
    is `bin/duo-state.py` in the checkout or `assets/duo-state.py` in the built skill.
-   Create the run directory, keep it excluded from code commits, and initialize
+   Run `python3 /absolute/path/duo-state.py protocol` without run arguments and
+   require protocol_version 2. Create the run directory, exclude it from code commits, and initialize
    once with `init --run-dir PATH --run-id ID --worktree PATH --gate
    COMMAND --reviewer IDENTITY`. In file mode use a stable identity such as reviewer;
    both templates read it from controller status.
@@ -68,7 +77,8 @@ for branch behavior, flags and resume.
    (absolute path with trailing slash), `CONTROLLER` (absolute path), `GATE_COMMANDS`,
    `WORK_ITEM_BLOCK` and `SOURCE_OF_TRUTH_BLOCK`. The last two describe the actual
    issue or existing brief. Orca templates additionally need current terminal handles.
-   Preserve literal work text; do not perform recursive substitution in user text.
+   Preserve the exact line-2 marker and literal work text; do not perform
+   recursive substitution in user text. Do not mix template/controller versions.
 4. Save planner.resolved.txt and reviewer.resolved.txt in the run directory and
    present the two prompts labeled by role and model. Both sessions start by reading
    controller status, so already-published work remains discoverable.
@@ -84,19 +94,28 @@ assets or duplicate the launcher logic in a slash-command body.
 - One run, one worktree shared by both agents. Existing versions are immutable.
 - Spec precedes plan; accepted spec/plan remain frozen. A changed specification
   needs human scoping and a new run.
+- Run metadata/frontmatter applies to protocol artifacts in the run directory,
+  not README.md or application documentation. Preserve their native format.
 - Publish sources/reviews atomically. `request` records source hash and request ID;
   `accept` validates those plus run, round, reviewer and five numbered sections.
 - Every artifact type has five explicit review criteria, including PR. Evidence
   and technical completeness determine the verdict; style and optional work do not.
 - Gate execution is controller-owned and bound to clean HEAD. Each code change
-  requires a new commit, gate and PR review for the new SHA. Remote PR head equality
-  is verified by the reviewer; local controller checks are not a GitHub API check.
+  requires a new commit, gate and PR review for the new SHA. Record GitHub's
+  current base SHA and head SHA; review against that base rather than stale local
+  main. The reviewer checks remote HEAD; publication checks it again.
+- Final PR reviews include `## Pending manual checks` with untested acceptance
+  checks/limitations or `None.`. Follow the approved acceptance policy and disclose
+  these pending checks in the published GitHub verdict.
 - Messages and GitHub comments convey information. Only accepted controller state
   advances the workflow. Successful delivery retries are idempotent.
 - Controller deadlines replace poll-count exits. Start with status, wait in bounded
   calls and heartbeat real progress. Preserve state for resume and human rulings.
 - Reviewer publishes learning proposals before its final PR acceptance. Planner
-  calls finalize; both finish only when status reports completed.
+  calls `publish-review --repo OWNER/NAME`, then finalize. Publication is an
+  idempotent SHA-specific comment, not native self-approval or magic approval text.
+  New protocol-2 runs finish only when status reports completed with a recorded
+  publication URL; include that link in the final summary.
 
 ## Learning and limits
 

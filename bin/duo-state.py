@@ -15,6 +15,7 @@ import tempfile
 import time
 
 MEMORY_REF = 'refs/agent-duo/learning'
+PROTOCOL_VERSION = 2
 
 
 class InvalidRun(Exception):
@@ -28,6 +29,11 @@ def require(condition, message):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def manual_checks(body):
+    sections = re.findall(r'^## Pending manual checks[ \t]*\n(.*?)(?=^#{1,6}[ \t]|\Z)', body, re.M | re.S)
+    require(len(sections) == 1 and sections[0].strip(), 'PR review must explicitly list Pending manual checks or None.')
 
 
 def process_identity(pid):
@@ -130,7 +136,7 @@ class Controller:
             require(all(old[key] == value for key, value in dict(run_id=args.run_id, worktree=str(repo), gate=args.gate, reviewer=args.reviewer).items()), 'run already initialized with different settings')
             return old
         now = time.time()
-        state = dict(schema_version=1, run_id=args.run_id, instance_id=digest(os.urandom(32)), worktree=str(repo), reviewer=args.reviewer,
+        state = dict(schema_version=1, protocol_version=PROTOCOL_VERSION, run_id=args.run_id, instance_id=digest(os.urandom(32)), worktree=str(repo), reviewer=args.reviewer,
                      gate=args.gate, phase='spec', revision=0, pending=None, approved={}, history=[],
                      rounds=dict(spec=0, plan=0, pr=0), round_limits=dict(spec=3, plan=3, pr=3),
                      review_errors=0, gate_result=None, started_at=now, budget_started_at=now,
@@ -255,6 +261,8 @@ class Controller:
             if pending['kind'] == 'pr':
                 head = self.valid_gate(state)
                 require(fields.get('head_sha') == pending['head_sha'] == head, 'review must approve the current checked HEAD')
+                if state.get('protocol_version') == PROTOCOL_VERSION:
+                    manual_checks(body)
         except InvalidRun:
             self.invalid_delivery(state)
             raise
@@ -374,6 +382,89 @@ class Controller:
         require(current['gate_result']['exit_code'] == 0, f'gate failed (exit {current["gate_result"]["exit_code"]}); see {log}')
         return current
 
+    def github(self, state, endpoint, payload=None, pages=False):
+        command = ['gh', 'api', '--hostname', 'github.com', endpoint]
+        if pages:
+            command += ['--paginate', '--slurp']
+        if payload is not None:
+            command += ['--method', 'POST', '--input', '-']
+        try:
+            result = subprocess.run(command, cwd=state['worktree'], text=True, capture_output=True,
+                                    input=json.dumps(payload) if payload is not None else None, timeout=30)
+        except FileNotFoundError as error:
+            raise InvalidRun('GitHub publication requires gh on PATH and gh auth login') from error
+        except subprocess.TimeoutExpired as error:
+            raise InvalidRun('GitHub request timed out; retry publish-review to reconcile any accepted comment') from error
+        require(result.returncode == 0, result.stderr.strip() or 'GitHub request failed; retry safely')
+        return json.loads(result.stdout)
+
+    def publication_evidence(self, state, repo):
+        require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo), 'repository must be OWNER/NAME')
+        self.frozen(state)
+        head = self.valid_gate(state)
+        approved = state['approved'].get('pr')
+        require(approved and approved['head_sha'] == head, 'PR must approve the current checked HEAD')
+        _, source_body, source_hash = artifact(self.run, approved['source'])
+        require(source_hash == approved['source_sha256'], 'approved PR request changed')
+        url = f'https://github.com/{repo}/pull/{state["pr_number"]}'
+        require(re.search(re.escape(url) + r'(?=$|[\s)<>])', source_body), 'repository/PR URL must appear in the approved PR request')
+        review = next(item for item in reversed(state['history']) if item['request_id'] == approved['request_id'] and item['status'] == 'approved')
+        _, review_body, review_hash = artifact(self.run, review['review'])
+        require(review_hash == review['review_sha256'], 'accepted PR review changed')
+        manual_checks(review_body)
+        marker = f'<!-- agent-duo-verdict:{state["instance_id"]}:{approved["request_id"]} -->'
+        body = (f'{marker}\n## Agent Duo review: approved\n\n'
+                f'Commit: `{head}`\nRun: `{state["run_id"]}`\n'
+                f'Review SHA256: `{review_hash}`\n\n'
+                f'Local gate passed on this commit (exit 0):\n\n```text\n{state["gate"]}\n```\n\n'
+                'This publishes the agent review. It is not a GitHub approving review, a merge, or a claim that pending manual checks passed.\n\n'
+                + review_body.strip() + '\n')
+        require(len(body.encode('utf-8')) <= 65000, 'verdict exceeds GitHub comment limit; shorten and re-review it')
+        return approved, review_hash, marker, body
+
+    def remote_head(self, state, repo, head):
+        pr = self.github(state, f'repos/{repo}/pulls/{state["pr_number"]}')
+        require(pr.get('state') == 'open' and pr.get('head', {}).get('sha') == head, 'GitHub PR must be open at the approved HEAD')
+
+    def publish_review(self, state, args):
+        require(state['phase'] in ('finalizing', 'completed'), 'accept the PR before publishing its verdict')
+        if state['phase'] != 'completed':
+            self.active(state)
+        approved, review_hash, marker, body = self.publication_evidence(state, args.repo)
+        self.remote_head(state, args.repo, approved['head_sha'])
+        pages = self.github(state, f'repos/{args.repo}/issues/{state["pr_number"]}/comments', pages=True)
+        comments = [comment for page in pages for comment in page]
+        matches = [comment for comment in comments if marker in comment.get('body', '')]
+        require(len(matches) <= 1, 'duplicate verdict markers; reconcile the PR discussion before finalization')
+        if matches:
+            comment = matches[0]
+            require(comment.get('body') == body, 'existing verdict was edited; do not overwrite it automatically')
+        else:
+            comment = self.github(state, f'repos/{args.repo}/issues/{state["pr_number"]}/comments', {'body': body})
+            require(comment.get('body') == body, 'GitHub did not return the expected verdict')
+        # A push while the request was in flight leaves historical evidence only.
+        self.publication_evidence(state, args.repo)
+        self.remote_head(state, args.repo, approved['head_sha'])
+        publication = dict(repo=args.repo, pr_number=state['pr_number'], head_sha=approved['head_sha'],
+                           request_id=approved['request_id'], review_sha256=review_hash,
+                           comment_id=comment['id'], url=comment['html_url'], body_sha256=digest(body.encode()))
+        if state.get('publication') == publication:
+            return state
+        state['publication'] = publication
+        return self.save(state)
+
+    def published(self, state):
+        if state.get('protocol_version', 1) < PROTOCOL_VERSION:
+            return  # Historical protocol-1 runs retain their original contract.
+        publication = state.get('publication')
+        require(publication, 'publish-review must succeed before finalization')
+        approved, review_hash, _, body = self.publication_evidence(state, publication['repo'])
+        require(publication['head_sha'] == approved['head_sha'] and publication['request_id'] == approved['request_id']
+                and publication['review_sha256'] == review_hash and publication['body_sha256'] == digest(body.encode()), 'published verdict is obsolete')
+        self.remote_head(state, publication['repo'], approved['head_sha'])
+        comment = self.github(state, f'repos/{publication["repo"]}/issues/comments/{publication["comment_id"]}')
+        require(comment.get('body') == body, 'published verdict is missing or changed')
+
     def memory(self, state, commit=None):
         if commit is None:
             result = git(state['worktree'], 'rev-parse', '--verify', MEMORY_REF, check=False)
@@ -410,6 +501,7 @@ class Controller:
         require(state['phase'] == 'finalizing', 'PR must be accepted before finalization')
         head = self.valid_gate(state)
         require(state['approved']['pr']['head_sha'] == head, 'approved commit no longer matches HEAD')
+        self.published(state)
         proposals = json.loads(Path(args.lessons).read_text()) if args.lessons else []
         require(isinstance(proposals, list), 'lessons proposals must be a JSON list')
         for proposal in proposals:
@@ -474,6 +566,7 @@ class Controller:
                 self.active(state)
                 self.frozen(state)
                 require(self.valid_gate(state) == head, 'HEAD changed during finalization')
+                self.published(state)
                 git(repo, 'update-ref', MEMORY_REF, commit, previous_commit or '0' * len(head))
             state.update(memory_commit=commit, completed_at=completed_at, phase='completed')
             return self.save(state)
@@ -503,7 +596,7 @@ class Controller:
             if args.command == 'heartbeat':
                 self.active(state)
                 return self.save(state)
-            return getattr(self, args.command)(state, args)
+            return getattr(self, args.command.replace('-', '_'))(state, args)
 
 
 def positive(value):
@@ -516,7 +609,8 @@ def positive(value):
 def parser():
     root = argparse.ArgumentParser(description=__doc__)
     commands = root.add_subparsers(dest='command', required=True)
-    for name in ('init', 'status', 'request', 'accept', 'gate', 'heartbeat', 'wait', 'resume', 'finalize', 'memory'):
+    commands.add_parser('protocol')
+    for name in ('init', 'status', 'request', 'accept', 'gate', 'heartbeat', 'wait', 'resume', 'finalize', 'memory', 'publish-review'):
         command = commands.add_parser(name)
         command.add_argument('--run-dir', required=True)
         if name == 'init':
@@ -538,6 +632,8 @@ def parser():
             command.add_argument('--reviewer')
         elif name == 'finalize':
             command.add_argument('--lessons')
+        elif name == 'publish-review':
+            command.add_argument('--repo', required=True)
     return root
 
 
@@ -546,6 +642,9 @@ def main():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, interrupt)
     args = parser().parse_args()
+    if args.command == 'protocol':
+        print(json.dumps(dict(protocol_version=PROTOCOL_VERSION)))
+        return 0
     if args.command == 'wait' and args.timeout > 60:
         parser().error('wait timeout must be at most 60 seconds')
     try:

@@ -24,7 +24,11 @@ class PackagingTests(unittest.TestCase):
         # The controller's behavior has its own suite. This fixture checks that
         # packaging includes the exact executable supplied by the source tree.
         self.controller = self.root / "bin/duo-state.py"
-        self.controller.write_text("#!/usr/bin/env python3\nprint('controller fixture')\n")
+        self.controller.write_text(
+            "#!/usr/bin/env python3\nimport sys\n"
+            "assert sys.argv[1:] == ['protocol']\n"
+            "print('{\"protocol_version\": 2}')\n"
+        )
         self.controller.chmod(0o755)
         self.skill = self.root / "skill/SKILL.md"
         self.skill.write_text(
@@ -41,6 +45,15 @@ class PackagingTests(unittest.TestCase):
     def assert_builds(self):
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def assert_rejected_preserving_previous_distribution(self, diagnostic):
+        previous = self.root / "dist/previous.txt"
+        previous.parent.mkdir(exist_ok=True)
+        previous.write_text("previous successful build\n")
+        result = self.build()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(diagnostic, result.stderr)
+        self.assertEqual(previous.read_text(), "previous successful build\n")
 
     def test_installation_includes_executable_launcher_and_controller(self):
         self.assert_builds()
@@ -114,13 +127,48 @@ class PackagingTests(unittest.TestCase):
 
     def test_missing_launcher_fails_before_replacing_previous_distribution(self):
         (self.root / "bin/duo.sh").unlink()
-        previous = self.root / "dist/previous.txt"
-        previous.parent.mkdir()
-        previous.write_text("previous successful build\n")
-        result = self.build()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("bin/duo.sh", result.stderr)
-        self.assertEqual(previous.read_text(), "previous successful build\n")
+        self.assert_rejected_preserving_previous_distribution("bin/duo.sh")
+
+    def test_legacy_or_mismatched_prompts_preserve_previous_distribution(self):
+        for filename in ("planner.md", "reviewer.md", "planner-orca.md", "reviewer-orca.md"):
+            template = self.root / "skill/assets" / filename
+            original = template.read_text()
+            for marker in ("", "<!-- agent-duo: protocol=1 role=planner transport=file -->"):
+                with self.subTest(filename=filename, marker=marker):
+                    try:
+                        template.write_text("/loop Legacy prompt\n" + marker + "\n{{CONTROLLER}}\n")
+                        self.assert_rejected_preserving_previous_distribution(filename)
+                    finally:
+                        template.write_text(original)
+
+    def test_wrong_role_transport_or_duplicate_marker_preserves_previous_distribution(self):
+        template = self.root / "skill/assets/planner.md"
+        for marker in (
+            "<!-- agent-duo: protocol=2 role=reviewer transport=file -->",
+            "<!-- agent-duo: protocol=2 role=planner transport=orchestration -->",
+            "<!-- agent-duo: protocol=2 role=planner transport=file -->\n"
+            "<!-- agent-duo: protocol=2 role=planner transport=file -->",
+        ):
+            with self.subTest(marker=marker):
+                template.write_text("/loop Planner\n" + marker + "\n{{CONTROLLER}}\n")
+                self.assert_rejected_preserving_previous_distribution("planner.md")
+
+    def test_prompt_without_controller_preserves_previous_distribution(self):
+        for filename in ("planner.md", "reviewer.md", "planner-orca.md", "reviewer-orca.md"):
+            template = self.root / "skill/assets" / filename
+            original = template.read_text()
+            with self.subTest(filename=filename):
+                try:
+                    template.write_text(original.replace("{{CONTROLLER}}", "legacy-controller"))
+                    self.assert_rejected_preserving_previous_distribution(filename)
+                finally:
+                    template.write_text(original)
+
+    def test_incompatible_controller_preserves_previous_distribution(self):
+        for response in ('{"protocol_version": 1}', "legacy controller", '{}'):
+            with self.subTest(response=response):
+                self.controller.write_text("#!/usr/bin/env python3\nprint(" + repr(response) + ")\n")
+                self.assert_rejected_preserving_previous_distribution("bin/duo-state.py")
 
 
 if __name__ == "__main__":

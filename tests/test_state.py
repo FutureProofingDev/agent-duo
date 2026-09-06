@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import github_fixture
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'bin' / 'duo-state.py'
 
@@ -17,11 +18,12 @@ class ControllerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        self.env = github_fixture.environment(self.repo)
         self.git('init', '-q')
         self.git('config', 'user.name', 'Duo tests')
         self.git('config', 'user.email', 'duo@example.invalid')
         (self.repo / 'code.txt').write_text('baseline\n')
-        (self.repo / '.gitignore').write_text('docs/agent-duo/runs/\n')
+        (self.repo / '.gitignore').write_text('docs/agent-duo/runs/\ngithub-fixture/\n')
         self.git('add', '.')
         self.git('commit', '-qm', 'baseline')
         self.run = self.repo / 'docs/agent-duo/runs/test-run'
@@ -32,7 +34,7 @@ class ControllerTests(unittest.TestCase):
 
     def cli(self, command, *args, ok=True):
         self.assertTrue(SCRIPT.is_file(), 'deterministic controller is not implemented')
-        result = subprocess.run([sys.executable, str(SCRIPT), command, '--run-dir', str(self.run), *map(str, args)], text=True, capture_output=True)
+        result = subprocess.run([sys.executable, str(SCRIPT), command, '--run-dir', str(self.run), *map(str, args)], text=True, capture_output=True, env=self.env)
         if ok:
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             return json.loads(result.stdout)
@@ -49,18 +51,21 @@ class ControllerTests(unittest.TestCase):
 
     def source(self, kind, round=1, **extra):
         name = f'{kind}-v{round}.md' if kind != 'pr-request' else f'prr-123-v{round}.md'
-        return self.artifact(name, dict(run_id='test-run', type=kind, round=round, **extra))
+        return self.artifact(name, dict(run_id='test-run', type=kind, round=round, **extra), 'https://github.com/example/project/pull/123\n' if kind == 'pr-request' else 'content\n')
 
     def review(self, pending, status='approved', **extra):
         fields = dict(run_id='test-run', type='review', round=pending['round'], source=pending['source'], source_sha256=pending['source_sha256'], request_id=pending['request_id'], reviewer='reviewer-1', status=status)
         if pending.get('head_sha'):
             fields['head_sha'] = pending['head_sha']
         fields.update(extra)
-        return self.artifact('cr-' + pending['source'], fields, ''.join(f'## {n}. Criterion\nEvidence and decision.\n' for n in range(1, 6)))
+        return self.artifact('cr-' + pending['source'], fields, ''.join(f'## {n}. Criterion\nEvidence and decision.\n' for n in range(1, 6)) + '\n## Pending manual checks\nVoiceOver pending.\n')
 
     def approve(self, source):
         pending = self.cli('request', '--source', source)['pending']
-        return self.cli('accept', '--review', self.review(pending))
+        state = self.cli('accept', '--review', self.review(pending))
+        if pending['kind'] == 'pr':
+            state = self.cli('publish-review', '--repo', 'example/project')
+        return state
 
     def executing(self, gate='true'):
         self.init(gate)

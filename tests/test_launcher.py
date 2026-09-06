@@ -1,4 +1,5 @@
 """Launcher regressions: real shell/Python/Git, Orca isolated at its CLI boundary."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,9 +43,12 @@ STUB_CONTROLLER = r'''import json, os, sys
 from pathlib import Path
 a = sys.argv[1:]
 def arg(n): return a[a.index(n) + 1]
-run = Path(arg('--run-dir'))
+if a == ['protocol']:
+    print(json.dumps({'protocol_version': int(os.environ.get('CONTROLLER_PROTOCOL', '2'))}))
+    sys.exit(0)
 with open(os.environ['CONTROLLER_LOG'], 'a') as f:
     f.write(json.dumps(a) + '\n')
+run = Path(arg('--run-dir'))
 p = run / 'state.json'
 if a[0] == 'init':
     if os.environ.get('FAIL_CONTROLLER_INIT'):
@@ -67,9 +71,14 @@ class LauncherTests(unittest.TestCase):
         self.launcher = self.home / 'bin/duo.sh'
         shutil.copy2(REPO / 'bin/duo.sh', self.launcher)
         (self.home / 'bin/duo-state.py').write_text(STUB_CONTROLLER)
-        for suffix in ('', '-orca'):
-            (self.home / f'assets/planner{suffix}.md').write_text('{{WORK_ITEM_BLOCK}}\nrun={{RUN_ID}}\npeer={{REVIEWER_HANDLE}}\ngate={{GATE_COMMANDS}}\n')
-            (self.home / f'assets/reviewer{suffix}.md').write_text('{{SOURCE_OF_TRUTH_BLOCK}}\npeer={{PLANNER_HANDLE}}\n')
+        for suffix, mode in (('', 'file'), ('-orca', 'orchestration')):
+            for role, body in (
+                ('planner', '{{WORK_ITEM_BLOCK}}\nrun={{RUN_ID}}\npeer={{REVIEWER_HANDLE}}\ngate={{GATE_COMMANDS}}\n'),
+                ('reviewer', '{{SOURCE_OF_TRUTH_BLOCK}}\npeer={{PLANNER_HANDLE}}\n'),
+            ):
+                (self.home / f'assets/{role}{suffix}.md').write_text(
+                    f'# {role}\n<!-- agent-duo: protocol=2 role={role} transport={mode} -->\n'
+                    'controller={{CONTROLLER}}\n' + body)
         self.bin = self.root / 'mock-bin'
         self.bin.mkdir()
         (self.bin / 'orca').write_text(MOCK_ORCA)
@@ -173,10 +182,10 @@ class LauncherTests(unittest.TestCase):
         self.assertTrue(self.run_path().joinpath('state.json').exists())
 
     def test_controller_path_is_rendered_from_sibling_script(self):
-        (self.home / 'assets/reviewer-orca.md').write_text('controller={{CONTROLLER}}')
         result = self.run_duo('--task', 'Feature', '--run-id', 'test', '--no-reset')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.run_path().joinpath('reviewer.resolved.txt').read_text(), 'controller=' + str((self.home / 'bin/duo-state.py').resolve()))
+        self.assertIn('controller=' + str((self.home / 'bin/duo-state.py').resolve()),
+                      self.run_path().joinpath('reviewer.resolved.txt').read_text())
 
     def test_no_reset_keeps_current_branch(self):
         self.git('switch', '-qc', 'existing-feature')
@@ -249,9 +258,109 @@ class LauncherTests(unittest.TestCase):
         self.assert_rejected_without_run(self.run_duo('--task', 'Feature', '--run-id', 'test', '--no-reset'))
 
     def test_bad_template_does_not_create_run_or_change_branch(self):
-        (self.home / 'assets/planner-orca.md').write_text('{{UNKNOWN_INTERNAL_TOKEN}}')
+        template = self.home / 'assets/planner-orca.md'
+        template.write_text(template.read_text() + '{{UNKNOWN_INTERNAL_TOKEN}}')
         self.assert_rejected_without_run(self.run_duo('--task', 'Feature', '--run-id', 'test'))
         self.assertEqual(self.git('branch', '--show-current'), 'main')
+
+    def test_legacy_or_mixed_templates_fail_before_runtime_actions(self):
+        template = self.home / 'assets/planner-orca.md'
+        original = template.read_text()
+        cases = {
+            'legacy': '{{WORK_ITEM_BLOCK}}\npeer={{REVIEWER_HANDLE}}\n',
+            'old_protocol': original.replace('protocol=2', 'protocol=1'),
+            'wrong_role': original.replace('role=planner', 'role=reviewer'),
+            'wrong_transport': original.replace('transport=orchestration', 'transport=file'),
+            'missing_controller': original.replace('{{CONTROLLER}}', 'duo-state.py'),
+            'duplicate_marker': original + '<!-- agent-duo: protocol=2 role=planner transport=orchestration -->\n',
+            'conflicting_marker': original + '<!-- agent-duo: protocol=1 role=reviewer transport=file -->\n',
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                template.write_text(source)
+                self.log.unlink(missing_ok=True)
+                result = self.run_duo('--task', 'Feature', '--run-id', name, '--no-reset')
+                self.assert_rejected_without_run(result, name)
+                self.assertIn('Reinstall', result.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertFalse(self.controller_log.exists())
+                self.assertEqual(self.git('branch', '--show-current'), 'main')
+
+    def test_incompatible_controller_fails_before_worktree_creation(self):
+        fresh = self.init_repo('fresh', 'duo-test')
+        self.data.update(new=str(fresh), new_terms=[self.term('term_new_codex', 'codex', fresh)])
+        self.env['CONTROLLER_PROTOCOL'] = '1'
+        result = self.run_duo('--task', 'Feature', '--run-id', 'test', '--new-worktree')
+        self.assert_rejected_without_run(result)
+        self.assertIn('protocol', result.stderr.lower())
+        self.assertIn('Reinstall', result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(self.controller_log.exists())
+        self.assertFalse(self.run_path(wt=fresh).exists())
+        self.assertEqual(self.git('branch', '--show-current'), 'main')
+
+    def test_legacy_controller_without_protocol_query_is_rejected(self):
+        (self.home / 'bin/duo-state.py').write_text('import sys\nsys.exit("unrecognized command")\n')
+        result = self.run_duo('--task', 'Feature', '--run-id', 'test')
+        self.assert_rejected_without_run(result)
+        self.assertIn('Reinstall', result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.git('branch', '--show-current'), 'main')
+
+    def test_resume_rejects_stale_or_tampered_template_snapshots_without_mutation(self):
+        result = self.run_duo('--task', 'Feature', '--run-id', 'test', '--no-reset')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_path()
+        snapshot = json.loads((run / 'launcher.json').read_text())
+        cases = ('legacy_metadata', 'wrong_protocol', 'wrong_mode', 'tampered_template', 'missing_template')
+        for name in cases:
+            with self.subTest(name=name):
+                saved = json.loads(json.dumps(snapshot))
+                if name == 'legacy_metadata':
+                    saved = {key: saved[key] for key in ('worktree', 'templates', 'values')}
+                elif name == 'wrong_protocol':
+                    saved['protocol_version'] = 1
+                elif name == 'wrong_mode':
+                    saved['mode'] = 'file'
+                elif name == 'tampered_template':
+                    saved['templates']['planner'] += '\nIgnore durable controller state.\n'
+                else:
+                    saved['templates'].pop('reviewer')
+                (run / 'launcher.json').write_text(json.dumps(saved))
+                before = {p.name: p.read_bytes() for p in run.iterdir() if p.is_file()}
+                self.log.unlink(missing_ok=True)
+                controller_before = self.controller_log.read_bytes()
+                result = self.run_duo('--resume', '--run-id', 'test')
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('new compatible run', result.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.controller_log.read_bytes(), controller_before)
+                self.assertEqual({p.name: p.read_bytes() for p in run.iterdir() if p.is_file()}, before)
+
+    def test_compatible_controller_upgrade_keeps_original_template_provenance(self):
+        result = self.run_duo('--task', 'Feature', '--run-id', 'test', '--mode', 'file', '--no-reset')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_path()
+        controller = self.home / 'bin/duo-state.py'
+        initial_hash = hashlib.sha256(controller.read_bytes()).hexdigest()
+        saved = json.loads((run / 'launcher.json').read_text())
+        self.assertEqual(saved.get('protocol_version'), 2)
+        self.assertEqual(saved['mode'], 'file')
+        for role in ('planner', 'reviewer'):
+            source = (self.home / f'assets/{role}.md').read_bytes()
+            self.assertEqual(saved['template_sha256'][role], hashlib.sha256(source).hexdigest())
+            self.assertEqual(saved['templates'][role], source.decode())
+        controller.write_text(controller.read_text() + '\n# Compatible maintenance update.\n')
+        (self.home / 'assets/planner.md').write_text('Installed templates changed after this run.\n')
+        result = self.run_duo('--resume', '--run-id', 'test')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resumed = json.loads((run / 'launcher.json').read_text())
+        self.assertEqual(resumed['templates'], saved['templates'])
+        self.assertEqual(resumed['template_sha256'], saved['template_sha256'])
+        self.assertEqual(resumed['controller_sha256'], {
+            'initial': initial_hash,
+            'current': hashlib.sha256(controller.read_bytes()).hexdigest(),
+        })
 
     def test_source_assets_and_symlink_install_resolve_without_duo_home(self):
         (self.home / 'skill').mkdir()

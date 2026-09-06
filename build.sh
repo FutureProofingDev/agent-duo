@@ -15,9 +15,11 @@ command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
 # Plain prose and shell expressions are not interpreted as file references.
 python3 - "$ROOT" <<'PY'
 from pathlib import Path
+import json
 import os
 import posixpath
 import re
+import subprocess
 import sys
 
 root = Path(sys.argv[1])
@@ -35,6 +37,36 @@ for relative in (
 for relative in ("bin/duo.sh", "bin/duo-state.py"):
     if not os.access(root / relative, os.X_OK):
         fail(relative + " must be executable")
+
+protocol_version = 2
+try:
+    controller = subprocess.run(
+        [sys.executable, str(root / "bin/duo-state.py"), "protocol"],
+        text=True, capture_output=True, check=True, timeout=10,
+    )
+    protocol = json.loads(controller.stdout)
+except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+    fail("bin/duo-state.py: cannot read controller protocol: " + str(error))
+if not isinstance(protocol, dict) or protocol.get("protocol_version") != protocol_version:
+    fail("bin/duo-state.py: controller must support protocol " + str(protocol_version))
+
+for role in ("planner", "reviewer"):
+    for suffix, transport in (("", "file"), ("-orca", "orchestration")):
+        relative = "skill/assets/" + role + suffix + ".md"
+        template = root / relative
+        if not template.is_file():
+            fail(relative + " missing")
+        text = template.read_text()
+        marker = (
+            "<!-- agent-duo: protocol=" + str(protocol_version)
+            + " role=" + role + " transport=" + transport + " -->"
+        )
+        lines = text.splitlines()
+        markers = re.findall(r"<!--\s*agent-duo:.*?-->", text, re.S)
+        if len(lines) < 2 or lines[1] != marker or markers != [marker]:
+            fail(relative + ": needs one matching protocol marker on line 2: " + marker)
+        if "{{CONTROLLER}}" not in text:
+            fail(relative + ": missing {{CONTROLLER}} placeholder")
 
 metadata = re.match(r"\A---\n(.*?)\n---(?:\n|\Z)", (skill / "SKILL.md").read_text(), re.S)
 if not metadata:
