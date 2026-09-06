@@ -1,151 +1,168 @@
-# Agent Duo Protocol Reference
+# Agent Duo protocol
 
-The filesystem is the message bus. Every artifact is a markdown file with YAML
-frontmatter in the run folder: `{{RUNS_ROOT}}{{RUN_ID}}/`.
+Two agents produce Markdown evidence. `duo-state.py`, a Python 3 standard-library
+controller, owns the state machine. Both agents and both transports use the same
+controller and one dedicated Git worktree per run.
 
-## Frontmatter schema
+## Authority and lifecycle
+
+```
+brief/issue → spec review → plan review → implementation → gate → PR review
+                ↖ revise       ↖ revise                    ↖ fix + new gate
+                                                            ↓
+                                                       finalize → completed
+```
+
+An encouraging message, a frontmatter field alone, a closed Orca task or a GitHub
+approval comment cannot advance a run. `accept` validates the complete review and
+current request. Finalization persists memory before marking completion.
+
+The planner owns implementation and addresses review findings. The reviewer owns
+the substantive verdict and evidence. The controller owns request identity,
+source immutability, phase ordering, three content rounds per phase (including PR),
+a separate maximum of two malformed-review retries, time budgets, gate execution
+and completion. Neither agent implements its own counters.
+
+This is a reliability boundary for cooperating local agents. Both can write the
+same files and invoke the controller, so reviewer metadata is not authentication
+against a malicious agent. GitHub may prevent native approval when both agents use
+the same account; a local validated review still records the assigned reviewer.
+
+## Files and publication
+
+All run files live in `docs/agent-duo/runs/<run_id>/` by default. Run artifacts and
+controller state are local audit records, normally gitignored; they do not become
+part of the code PR automatically. Preserve the run directory for recovery.
+
+| Artifact | Filename | Writer |
+|---|---|---|
+| Verbatim work statement | `brief.md` | launcher, or planner during manual setup |
+| Spec | `spec-v1.md`, `spec-v2.md`, … | planner |
+| Plan | `plan-v1.md`, `plan-v2.md`, … | planner |
+| PR request | `prr-123-v1.md`, `prr-123-v2.md`, … | planner |
+| Review | `cr-` plus the source filename, e.g. `cr-spec-v1.md` | reviewer |
+| Human decision context | `escalation.md` | planner |
+| Learning proposals | `lessons-proposals.json` | reviewer |
+| Agent logs | `log-planner.md`, `log-reviewer.md` | respective agent |
+
+Create a temporary file in the run directory, finish writing it, then atomically
+rename it to the final filename. Request a review only after publication. Do the
+same for reviews before calling `accept`. A requested source is immutable; a
+content revision needs the next version. Accepted spec and plan remain frozen.
+A human-authorized specification change starts a new run with the revised brief.
+
+## Strict frontmatter
+
+The supported YAML subset is a flat mapping of scalar fields. Do not use nested
+structures, duplicate keys or inline comments. Required source fields:
 
 ```yaml
 ---
-run_id: <run_id>          # required on every file; agents ignore other run_ids
-type: brief | spec | plan | review | pr-request | escalation
-round: <n>                # review round this artifact belongs to
-status: approved | changes_requested   # reviews only
-source: <filename>        # reviews only: the file being reviewed
+run_id: example-a
+type: spec
+round: 1
 ---
 ```
 
-Agents parse frontmatter, never prose, to decide state. Prose is for humans
-and for the substance of reviews/plans.
+Types are `spec`, `plan` and `pr-request`. PR source filenames include the PR number
+and round, and their frontmatter additionally contains `head_sha` (full Git commit
+ID) and `pr_number`. `request` returns `request_id` and `source_sha256`; use those
+exact values in the review, along with the assigned reviewer from `status`:
 
-## Filenames
-
-| Artifact            | Name                          | Written by |
-|---------------------|-------------------------------|------------|
-| Brief (no-issue runs) | `brief.md` (verbatim work statement) | planner |
-| Spec (versioned)    | `spec-v<N>.md`                | planner    |
-| Spec review         | `cr-spec-v<N>.md`             | reviewer   |
-| Plan (versioned)    | `plan-v<N>.md`                | planner    |
-| Plan review         | `cr-plan-v<N>.md`             | reviewer   |
-| PR request          | `prr-<PR_NUMBER>.md`          | planner    |
-| Escalation          | `escalation.md`               | planner    |
-| Run log             | `log.md` (append-only)        | both       |
-
-Plans are never edited in place; a new round means a new version file.
-
-## Status tokens (exact strings)
-
-- Frontmatter: `status: approved` / `status: changes_requested`
-- PR sign-off: a GitHub PR comment containing exactly `PR APPROVED`
-
-## State machine
-
-```
-[human brainstorm → brief]
-SPEC v1 → review ↔ revise (max 3 rounds) → approved (spec now FROZEN)
-PLAN v1 → review ↔ revise (max 3 rounds) → approved
-GATE (tests+lint+build) → PR → prr file
-PR → reviewer comments ↔ planner fixes/pushes → "PR APPROVED" comment → done
-any phase at round 3 unapproved → escalation.md → exit (resume on human ruling)
-spec change needed after freeze → escalation.md, never a silent edit
+```yaml
+---
+run_id: example-a
+type: review
+round: 1
+source: spec-v1.md
+source_sha256: <hash returned by request>
+request_id: <request ID returned by request>
+reviewer: <current assigned reviewer>
+status: approved
+---
 ```
 
-Escalation resume: human edits `escalation.md` with a ruling; planner detects
-the modification and resumes applying it.
+The other verdict is `changes_requested`. PR reviews also require `head_sha`.
+Every review contains five Markdown headings `## 1. <criterion>` through
+`## 5. <criterion>`, each with evidence. The canonical five-item spec, plan and PR
+rubrics are in both reviewer assets. Style and optional improvements never block.
+On later rounds, assess the diff and assumptions it affects, and verify prior
+blockers; an unchanged file can still be affected by a change elsewhere.
 
-## Ownership (one owner per rule)
+## Controller CLI
 
-| Rule                        | Owner    |
-|-----------------------------|----------|
-| Round caps (max 3 per phase), escalation | planner |
-| Approval bar, rubric        | reviewer |
-| Quality (tests/lint/build)  | deterministic gate, not an LLM |
-| Stall breaker (20 polls)    | each agent for itself |
+Every subcommand takes `--run-dir <absolute run directory>`:
 
-Never give both agents a counting rule — off-by-one between them deadlocks
-or double-exits the run.
+| Command | Purpose |
+|---|---|
+| `init --run-id ID --worktree PATH --gate COMMAND --reviewer IDENTITY` | Initialize a new run once; the launcher does this |
+| `status` | JSON state including revision, phase and pending request |
+| `request --source BASENAME` | Validate and register the next immutable source |
+| `accept --review BASENAME` | Validate review identity, content and evidence; advance state |
+| `gate [--timeout SECONDS]` | Execute the configured gate for the current clean HEAD |
+| `heartbeat` | Record meaningful progress during long work |
+| `wait --after REVISION --timeout 30` | Wait outside the LLM for state change or a checkpoint |
+| `resume [--reviewer IDENTITY] [--reason TEXT]` | Recover persistent state; a human ruling is required after escalation |
+| `finalize [--lessons PATH.json]` | Persist the completed-run ledger and lessons, then complete |
+| `memory` | Read JSON `{runs, lessons}` from the local learning ref |
 
-## Reviewer rubrics
+Example:
 
-Spec reviews judge the WHAT (faithful to brief/issue, testable criteria,
-explicit non-goals, no implementation details). Plan reviews judge the HOW
-against the approved, frozen spec. Full rubrics live in the reviewer prompt
-template.
+```bash
+python3 /absolute/path/duo-state.py status --run-dir /worktree/docs/agent-duo/runs/example-a
+python3 /absolute/path/duo-state.py request --run-dir /worktree/docs/agent-duo/runs/example-a --source spec-v1.md
+python3 /absolute/path/duo-state.py accept --run-dir /worktree/docs/agent-duo/runs/example-a --review cr-spec-v1.md
+```
 
-### Plan review rubric (reference)
+The reviewer calls `accept` after publication. The planner can repeat the same
+successful submission if delivery is uncertain: acceptance is idempotent. A
+malformed review is corrected for its pending request within the retry limit;
+content changes use new rounds. Errors do not imply approval.
 
-Answer each explicitly, one section per item:
+## Gate and exact-commit PR review
 
-1. Issue runs: does the plan address every acceptance criterion of the issue?
-   Brief runs: are the derived acceptance criteria a faithful, complete reading
-   of brief.md, and does the plan address all of them?
-2. Does it touch anything outside stated scope? Flag it.
-3. Migration/rollback concerns handled?
-4. Are edge cases named and covered?
-5. Any technical unsoundness (race conditions, security, data loss)?
+Commit implementation changes and make the tracked worktree clean before `gate`.
+The controller runs the configured commands and records their exit status and
+commit. Failure, timeout or worktree/HEAD changes invalidate the result. Choose
+real repository checks; the controller cannot make a trivial command meaningful.
 
-Approval bar: technically sound + criteria covered. Style, naming, and
-optional improvements are non-blocking notes, never blockers. On round n+1,
-verify previous numbered items were addressed and re-review only the diff.
+Open or update a PR only after a passing gate. The reviewer verifies GitHub's
+current head matches the local commit and `head_sha` in the PR request, including
+immediately before submitting the review. The controller validates local HEAD,
+request hash, assigned reviewer and gate evidence. It does not query GitHub, so
+remote-head verification remains an explicit reviewer duty.
 
-## Why these choices (context for customization)
+After every code fix: commit, gate again, push, verify the remote head and request
+a new PR review with an incremented filename/round. Completion requires:
 
-- **Frontmatter over magic strings in prose**: one paraphrase away from a
-  stall otherwise; parsing structured fields is deterministic.
-- **Deterministic gate between approval and PR**: converts the reviewer's job
-  from "find every bug" to "find design problems", which is what LLM review is
-  good at. The harness catches "tests didn't run".
-- **run_id everywhere**: kills stale-file bugs from previous runs for free and
-  enables parallel runs.
-- **Append-only log.md**: single file to read when a run stalls at 3am; also
-  data for tuning the rubric after a few runs.
-- **Worktree per RUN, not per agent**: two runs sharing one checkout is an
-  incident waiting to happen, but two agents in separate worktrees is worse.
-  Git worktrees are separate directories, so split agents cannot see each
-  other's artifacts and the handshake stalls with no error. One worktree per
-  run, both agents inside it, one terminal each.
-- **Poll budget**: polling loops fail expensive, not loud. A stalled run that
-  exits after 20 polls costs cents.
+```
+reviewed SHA = gate SHA = request SHA = current local HEAD
+```
 
-## Work item sources
+Human-facing GitHub comments should name that SHA. They do not determine local
+state. Approval is followed by `finalize`; only `phase: completed` is success.
+This workflow does not merge PRs automatically.
 
-The protocol is source-agnostic. Two variants:
+## Waiting, escalation and recovery
 
-- **Issue run**: source of truth is the GitHub issue. No brief.md.
-- **Brief run**: no issue exists. Planner's first action is writing the user's
-  work statement verbatim into brief.md (type: brief, round: 0). The planner
-  derives acceptance criteria in plan-v1; the reviewer reviews the criteria
-  themselves as rubric item 1. This closes the loop that normally a human
-  closes by writing the issue: the derived criteria are an artifact under
-  review, not an assumption.
+Start by reading `status` and existing pending work. Notifications are hints, so
+starting the reviewer late cannot lose a published artifact. Wait in bounded
+30-second calls and emit heartbeats for actual progress; repeated empty waits do
+not extend a run. The controller applies elapsed-time/progress budgets, avoiding
+both an arbitrary poll count and unbounded spinning.
 
-## Role assignment
+When escalated, preserve the run and explain the unresolved findings. A human
+ruling is recorded via `resume --reason TEXT`; elapsed time and edited prose are
+not rulings. Resume restores the saved phase/request instead of starting over.
+In Orca, use `duo --resume --run-id ID` to refresh terminal identities and reconcile
+pending work. Runtime task loss does not discard an accepted controller result.
+See [orchestration.md](orchestration.md) for transport recovery and
+[learning.md](learning.md) for durable finalization.
 
-Roles are defined entirely by which prompt a model receives. Any decorrelated
-pair works in either direction (Opus plans + Sol reviews, Sol plans + Opus
-reviews). When generating, label each prompt with the target MODEL explicitly;
-pasting them into the wrong agents is the most common setup error.
+## Field lessons retained
 
-
-## Field findings (first live run, 2026-07-23)
-
-Fixes below came from an end-to-end orchestration-mode run. Keep them.
-
-1. **Task spec strings are load-bearing.** The coordinator wrote each dispatch
-   spec freehand. The two that spelled out the reporting contract produced
-   correctly tagged completions; the shorter third one did not, and its task
-   stayed `dispatched` forever. Use a fixed template for every dispatch,
-   including the PR phase.
-2. **A missing taskId/dispatchId fails silently.** The coordinator still gets the
-   worker_done and the run proceeds, so the only symptom is an open task in
-   `task-list`. Verify task closure after each round rather than trusting the
-   message.
-3. **Reviewers drift off the output contract before they drift off the rubric.**
-   Three reviews in a row skipped the five numbered sections and returned short
-   prose instead, while still citing real specifics. Require the numbered
-   sections explicitly and treat their absence as an incomplete review.
-4. **One shared log.md interleaves.** Both agents appending produced entries out
-   of chronological order. Give each agent its own log file.
-5. **The PR step is not zero-touch.** The planner blocked on an interactive
-   git push / PR creation confirmation. Budget for a human gate there, or
-   pre-authorize the push in the agent's environment.
+The first live run exposed reporting-contract drift, missing dispatch IDs,
+incomplete rubrics and conflicting log writes. Preserve exact request metadata,
+five evidence sections, retryable tagged delivery, and one log per agent.
+Push/PR permissions still come from the agent environment and user authorization;
+the controller does not bypass them.

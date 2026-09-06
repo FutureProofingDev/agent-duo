@@ -1,168 +1,179 @@
 # agent-duo
 
-An automated **planner/executor + reviewer** loop. Point it at any work item, a
-GitHub issue, a bug report, or a pasted feature idea, and two agents take it
-through:
+A planner/executor and a reviewer take a GitHub issue or feature brief through:
 
 ```
-brief → SPEC (approved) → PLAN (approved) → execute → gate → PR (approved)
+brief → spec review → plan review → implementation → gate → PR review → finalize
 ```
 
-with no human in the middle except at escalation points.
+The agents handle design and review. A small Python controller validates the
+artifacts, keeps recoverable run state, executes the configured checks, and accepts
+PR review only for the current checked commit. Human intervention is required for
+unresolved decisions or permissions that the environment has not already granted.
 
-## Why it works
+## What it preserves
 
-- **Decorrelated pair.** The coder and reviewer are different models, so they
-  fail differently and the reviewer catches what the coder waves through. Roles
-  are flags, not repos: either model can plan or review.
-- **Spec before plan.** The spec review asks "is this the right thing to build?";
-  the plan review asks "is this the right way to build it?". Collapsing them is
-  where scope creep hides.
-- **A deterministic gate.** Tests, lint, and build must pass between plan
-  approval and PR. LLMs review design; the harness reviews quality.
-- **Filesystem as record.** Every artifact is a markdown file with YAML
-  frontmatter in a per-run folder, so a run is diffable, committable, and
-  debuggable after the fact.
+- Separate spec and plan reviews keep scope and implementation decisions explicit.
+- Any supported model can take either role; using different models can bring
+  different perspectives without guaranteeing independent errors.
+- Markdown reviews contain five criteria with evidence. Style and optional
+  improvements do not block approval.
+- Immutable versions, exact source hashes and per-run worktrees prevent accidental
+  reuse of old artifacts. Both agents share the worktree for their run.
+- Gate and PR approval are bound to one commit. Every code correction needs new
+  gate evidence and review; a comment containing an approval phrase cannot finish it.
 
 ## Requirements
 
-The workflow itself needs no particular IDE. Two capabilities are separate:
-
-| You want | You need |
+| Capability | Requirements |
 |---|---|
-| The loop (prompts, artifacts, rubrics, gate) | any two agent sessions, nothing else |
-| `duo` one-command launch | Orca ADE + its CLI + `jq` |
-| Orchestration transport (blocking waits, no polling) | Orca ADE + Settings -> Experimental -> Orchestration |
+| Portable file workflow | macOS or Linux, Python 3.9+, Git, two local agent sessions, repository checks |
+| One-command launcher | Above, plus Bash and Orca ADE/CLI |
+| Orca orchestration transport | Experimental orchestration enabled in Orca |
+| PR comments and creation | Authorized GitHub connector or CLI access |
 
-Without Orca you lose the launcher and the blocking waits, not the workflow.
-See "Running it without Orca" below.
+The controller uses the Python standard library. Its local checks protect
+cooperating agents from mistakes; they are not an authentication boundary against
+agents that can edit the same files. The reviewer verifies the remote PR head
+through GitHub, while the controller checks local HEAD and stored evidence.
 
-## Quick start (with Orca)
-
-```bash
-git clone git@github.com:FutureProofingDev/agent-duo.git ~/src/agent-duo
-export DUO_HOME=~/src/agent-duo
-export DUO_GATE="pnpm test:run && pnpm lint"
-ln -s $DUO_HOME/bin/duo.sh /usr/local/bin/duo
-
-duo --task "hide signup in login page" --run-id b
-duo --issue https://github.com/org/repo/issues/612 --run-id 612-a
-duo --task "..." --run-id c --planner codex --reviewer claude
-```
-
-`duo` resets the branch, resolves runtime-scoped terminal handles, fills both
-prompt templates, and sends them reviewer-first (the coordinator cannot dispatch
-to an agent that is not up yet).
-
-Watch a run:
+## Quick start with Orca
 
 ```bash
-orca orchestration task-list --json | jq '.result.tasks[] | select(.task_title | contains("run b"))'
-tail -f <worktree>/docs/agent-duo/runs/b/log-planner.md
+git clone https://github.com/FutureProofingDev/agent-duo.git /path/to/agent-duo
+export DUO_HOME=/path/to/agent-duo
+export DUO_GATE='pnpm test:run && pnpm lint'
+/path/to/agent-duo/bin/duo.sh --task 'Hide signup on the login page' --run-id login-a
+/path/to/agent-duo/bin/duo.sh --issue https://github.com/org/repo/issues/612 --run-id 612-a
 ```
 
-## Layout
+Use real gate commands for your repository; supply them via `--gate` or `DUO_GATE`.
+There is no project-specific fallback test command. New runs require exactly one
+of `--task` or `--issue`. Run IDs contain 1–64 letters/digits/underscores/hyphens
+and start with a letter or digit.
 
+The launcher validates the worktree and structured agent identities before sending
+anything, initializes run state, saves resolved prompts and preserves the literal
+brief. Default roles are planner Claude and reviewer Codex; switch them with
+`--planner codex --reviewer claude`. `--mode orchestration` is the default;
+`--mode file` uses the same controller without native task signaling.
+
+A new run normally gets branch `duo/<run_id>` from the resolved default base
+(origin's configured remote HEAD, otherwise current HEAD), or a base explicitly supplied with `--base REF`. No develop
+branch is assumed. `--new-worktree` creates a separate Orca worktree and retains
+its feature branch. `--no-reset` preserves the current branch and cannot be combined
+with `--base` or `--new-worktree`. Dirty/ambiguous state must be resolved instead of
+discarded. Explicit `--planner-terminal HANDLE` and `--reviewer-terminal HANDLE`
+resolve terminal ambiguity and are still checked for the correct agent/worktree.
+
+## Progress and recovery
+
+```bash
+python3 /path/to/agent-duo/bin/duo-state.py status --run-dir /worktree/docs/agent-duo/runs/login-a
+/path/to/agent-duo/bin/duo.sh --resume --run-id login-a
 ```
-skill/              the portable SKILL.md skill (works in Claude Code, Codex,
-  SKILL.md            Cursor, any SKILL.md-aware agent)
-  assets/             prompt templates (planner/reviewer x file/orca)
-  references/         protocol spec, orchestration mapping, Orca CLI notes
-  agents/openai.yaml  Codex invocation policy (explicit-only)
-bin/duo.sh          the shell launcher (Orca)
-commands/, templates/  sources for the optional Orca slash commands
-codex/AGENTS.md     read by a Codex agent that IS a duo agent mid-run
-build.sh            packages skill/ and assembles slash commands
-dist/               GENERATED, never edit
+
+The run directory keeps controller state, source/review artifacts, gate results,
+resolved prompts and separate log-planner.md / log-reviewer.md files. Run artifacts
+are normally gitignored and do not automatically join the code PR. Preserve this
+directory when you need to resume or inspect evidence.
+
+Resume refreshes runtime terminal handles and continues the saved phase. It does
+not reset the branch or overwrite the run. After escalation first record the human
+ruling with controller `resume --reason 'the approved recovery decision'`; a timeout
+or an edited comment is not approval. Sources already requested are immutable and
+approved spec/plan stay frozen. A revised specification starts a new scoped run.
+
+Agents use bounded controller waits and meaningful progress heartbeats. There is
+no 20-poll exit during a healthy long implementation. State and elapsed-time budgets
+provide the stopping conditions; missed notifications do not erase pending work.
+
+## Running without Orca
+
+Use two agent sessions in the same dedicated worktree. Resolve absolute paths and
+initialize a new run once:
+
+```bash
+mkdir -p /worktree/docs/agent-duo/runs/login-a
+python3 /path/to/agent-duo/bin/duo-state.py init   --run-dir /worktree/docs/agent-duo/runs/login-a --run-id login-a   --worktree /worktree --gate 'your test, lint and build commands' --reviewer reviewer
 ```
 
-`SKILL.md` is an open standard, not Anthropic-specific, so ONE skill folder
-serves every agent. Only the install location differs. `codex/AGENTS.md` is a
-different thing: it is what a Codex process reads when it is itself one of the
-two running agents, not how a human starts a run.
+Capture the work statement verbatim in the run's brief.md. Fill
+[skill/assets/planner.md](skill/assets/planner.md) and
+[skill/assets/reviewer.md](skill/assets/reviewer.md): `RUN_ID`, absolute `RUNS_ROOT`
+with a trailing slash, absolute `CONTROLLER`, actual `GATE_COMMANDS`,
+`WORK_ITEM_BLOCK` and `SOURCE_OF_TRUTH_BLOCK`. Preserve literal work text rather
+than recursively replacing braces inside it. Save the resolved prompts beside the
+run state and give each to its assigned session. Both begin by reading `status`,
+so correctness does not depend on which session starts first.
 
-## Installing the skill
+The reviewer atomically publishes a review and calls `accept`. The planner reads
+the controller's new phase, implements corrections and requests the next round.
+The full CLI/schema is in [the protocol reference](skill/references/protocol.md).
 
-`./build.sh` first, then install the same skill folder wherever you need it:
+Keep `docs/agent-duo/runs/` out of code commits. Add that path to the target
+repository's `.gitignore` or local `.git/info/exclude` before staging changes.
 
-| Agent | Location |
+## Completion and learning
+
+After final PR review acceptance, `finalize` persists the completed-run ledger and
+reviewer proposals in local Git ref `refs/agent-duo/learning`. Only then is the run
+completed. The memory commit is separate from the reviewed code, so it does not
+create an unreviewed code change or dirty the worktree after approval. No automatic
+PR merge or remote push of the memory ref is performed.
+
+Read memory with controller `memory`. Lessons remain advisory: two distinct
+completed runs confirm a pattern, five completed runs without confirmation make it
+dormant, and a later confirmation reactivates it. Retain legacy tracked lesson
+files as reference. Local memory is not included in the code PR; cross-machine
+sharing of the ref is an explicit operation. See
+[the learning reference](skill/references/learning.md).
+
+## Install the skill and commands
+
+Run `./build.sh`, then install the resulting skill folder:
+
+| Agent | Installation |
 |---|---|
-| Claude app | upload `dist/agent-duo.skill`, click Save skill |
-| Claude Code | `cp -r dist/agent-duo ~/.claude/skills/` |
-| Codex (personal) | `cp -r dist/agent-duo ~/.agents/skills/` |
-| Codex (per-repo, shared) | `cp -r dist/agent-duo .agents/skills/` and commit |
+| Claude app | Upload `dist/agent-duo.skill` |
+| Claude Code | Copy `dist/agent-duo` to `~/.claude/skills/` |
+| Codex personal | Copy `dist/agent-duo` to `~/.agents/skills/` |
+| Codex repository | Copy `dist/agent-duo` to `.agents/skills/` and commit |
 
-Codex reads skills from `.agents/skills/` (the cross-agent standard path), NOT
-`~/.codex/skills/`. In Codex, invoke with `$agent-duo` or browse `/skills`; it is
-explicit-only, so a stray prompt never triggers it. Restart the agent after
-installing so it loads. Rebuild after editing anything under `skill/`.
+In Codex invoke `$agent-duo`; the skill's invocation policy is explicit-only.
+Reload the agent after installing. The built skill includes executable
+`assets/duo.sh` and `assets/duo-state.py` as well as all four canonical prompts.
 
-## Running it without Orca
-
-Open two agent sessions in the same working directory. This matters: the agents
-coordinate through files, so separate checkouts break the handshake with no
-error.
-
-1. Copy `prompts/reviewer.md` and `prompts/planner.md`.
-2. Replace the `{{PLACEHOLDER}}` values by hand: `{{RUN_ID}}`,
-   `{{RUNS_ROOT}}` (e.g. `docs/agent-duo/runs/`), `{{GATE_COMMANDS}}`, and
-   either the issue fields or `{{WORK_ITEM_TEXT}}`. Each template has two
-   commented variants, issue-backed and brief-backed; keep the matching one and
-   delete the other. `{{PLANNER_HANDLE}}` / `{{REVIEWER_HANDLE}}` are
-   orchestration-only, so ignore them here.
-3. Paste the reviewer prompt first and let it settle, then the planner. The
-   reviewer must be watching the folder before the first artifact lands, or
-   nothing picks it up.
-
-From there it is identical: same artifacts, same rubrics, same gate. The agents
-poll the run folder instead of receiving dispatches, and each gives up after 20
-empty polls so a stalled run does not burn tokens overnight.
-
-## Slash commands (Orca, one-shot from inside an agent)
-
-If you would rather not use the shell launcher, run the whole thing from inside
-Claude Code or Codex:
-
-```
-/agent-duo --task "hide signup in login page" --run-id b
-```
-
-The command resolves the peer terminal, launches the reviewer there, then adopts
-the planner role in the current terminal. Like `duo.sh` it needs the `orca` CLI,
-since it still drives a second terminal; the difference is you invoke it from
-inside the agent instead of a shell.
-
-Install (run `./build.sh` first):
+Optional slash-command installations after building:
 
 ```bash
-cp dist/claude-commands/*.md  <repo>/.claude/commands/    # or ~/.claude/commands/
-cp dist/codex-prompts/*.md    ~/.codex/prompts/
+cp dist/claude-commands/*.md /path/to/repo/.claude/commands/
+cp dist/codex-prompts/*.md ~/.codex/prompts/
 ```
 
-`agent-duo-review` is a fallback for starting the reviewer by hand if
-auto-launch mis-resolves the peer terminal.
+`/agent-duo` delegates to the same deterministic launcher; it does not implement a
+second launch protocol. The reviewer fallback loads the run's existing
+reviewer.resolved.txt rather than reconstructing another version of its contract.
 
-## Transport modes
+## Repository layout and contributing
 
-- **file** (default, portable): agents poll the run folder. Works in any IDE.
-- **orchestration** (Orca, experimental): coordinator/worker dispatches and
-  blocking waits. No polling and no wasted tokens; timeouts become checkpoints
-  rather than guesses. See `references/orchestration.md`.
+```
+skill/assets/       canonical planner/reviewer prompts for file and Orca modes
+skill/references/   protocol, transport, launcher and learning documentation
+skill/SKILL.md      skill entrypoint
+bin/duo.sh          validated Orca launcher and literal renderer
+bin/duo-state.py    durable standard-library controller
+commands/          optional slash-command sources
+codex/AGENTS.md     guidance for Codex while participating in a run
+build*.sh          package the skill and command artifacts
+tests/             controller, launcher and packaging regression tests
+dist/              generated installation artifacts
+```
 
-Same protocol and artifacts either way; only the signaling changes.
-
-## Before your first run
-
-1. **Dry-run on a throwaway task.** The weak link is whether the IDE actually
-   wakes each agent.
-2. **Set real gate commands.** The planner treats whatever is in the gate as the
-   ship condition, so a placeholder means shipping unverified code.
-3. **Both agents share ONE worktree.** Git worktrees are separate directories,
-   so splitting them breaks the artifact handshake and stalls with no error.
-
-## Contributing
-
-The reviewer rubric is the part most worth tuning with real data.
-`references/protocol.md` ends with field findings from live runs; add to it. If
-you run this, open a PR with what you learned from your run logs: rounds burned,
-false blocks, misses.
+Edit canonical assets and rebuild; do not maintain copied reviewer bodies in
+parallel template trees. Run `python3 -m unittest discover -s tests` and `./build.sh`
+after implementation changes. Regression tests use disposable Git repositories
+and mocked Orca boundaries; they do not launch real agents or publish PRs.
+Before adopting a new Orca/IDE version, verify a throwaway handshake in that
+specific environment. Useful field findings include stale evidence, false blocks,
+missing criteria, timeouts and recovery behavior.

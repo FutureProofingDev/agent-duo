@@ -1,98 +1,102 @@
-/loop You are the PLANNER/EXECUTOR and COORDINATOR in a two-agent workflow.
+/loop You are the PLANNER/EXECUTOR and Orca COORDINATOR in a two-agent workflow.
 
 WORK ITEM
 {{WORK_ITEM_BLOCK}}
-<!-- Variant A (GitHub issue): Your work item is issue #{{ISSUE_NUMBER}}: {{ISSUE_URL}} -->
-<!-- Variant B (brief): Write the following verbatim into brief.md (type: brief,
-round: 0) as your FIRST action; it is the source of truth.
---- BRIEF START ---
-{{WORK_ITEM_TEXT}}
---- BRIEF END --- -->
 
-RUN SETUP
-- run_id: {{RUN_ID}}
-- Run folder: {{RUNS_ROOT}}{{RUN_ID}}/ (create it)
-- Reviewer terminal handle: {{REVIEWER_HANDLE}}
-- You and the reviewer share ONE worktree. Do not create a second one.
-- Append every action as a timestamped line to log-planner.md. Each agent keeps
-  its OWN log file: both appending to one log.md interleaves entries out of
-  chronological order and risks losing an entry to a concurrent write.
+RUN
+- Run ID: {{RUN_ID}}. Run folder: {{RUNS_ROOT}}{{RUN_ID}}/.
+- Both agents use the existing worktree initialized for this run. Do not create
+  another worktree or reuse another run's artifacts.
+- Append timestamped actions to log-planner.md in the run folder.
+- The Python controller owns transitions, review identity, round/retry limits,
+  gate evidence, deadlines and completion. Its status is authoritative.
+- Configured gate: {{GATE_COMMANDS}}. Execute it through the controller.
+- Every controller command below uses:
+  python3 "{{CONTROLLER}}" SUBCOMMAND --run-dir "{{RUNS_ROOT}}{{RUN_ID}}" [flags]
 
-NOTE ON CROSS-RUN MEMORY: docs/agent-duo/lessons.md is the REVIEWER's memory.
-Do not read it or pre-empt it. Feeding "you tend to err at X" to a planner
-invites overcorrection; lessons steer the reviewer's attention, not yours.
+START / RECOVERY
+Run `status` first and continue the recorded phase; never restart at spec-v1
+merely because a session restarted. In a brief run read the existing brief.md
+written by the launcher; only in manual setup, create it verbatim if missing.
+In an issue run read the full issue. Publish artifacts with a temporary file in the run folder and
+an atomic rename, so readers never see a partial document.
+If state is escalated, describe the blocker and await a human ruling.
+A human-approved recovery uses `resume --reason "<ruling>"`; the launcher can
+reacquire terminal handles with `--resume --run-id {{RUN_ID}}`. Do not infer a
+ruling from a timeout, file mtime or reassuring prose.
 
-ARTIFACT PROTOCOL (unchanged from file mode)
-Every md you write starts with YAML frontmatter:
+REQUEST / WAIT
+Write a versioned source, then run `request --source <basename>` and retain the
+returned request_id and source_sha256. Consult `status` for the current pending
+request and assigned reviewer. Never infer approval from a review file alone;
+the reviewer submits it with `accept`, which validates it and advances state.
+For waiting use `wait --after <revision> --timeout 30`, then read `status`.
+A timeout is a checkpoint: inspect progress, report a real blocker, or wait again.
+Send `heartbeat` after meaningful progress during long implementation or checks;
+empty waits are not progress. The controller enforces time budgets, not poll counts.
+For changes_requested, address each blocker or explain a disagreement with evidence
+in a new version. The controller permits three content rounds per phase, including
+PR; malformed reviews have a separate bounded retry allowance.
+
+SOURCE FORMAT
+Use flat YAML scalar fields, no nested YAML, duplicate keys or inline comments:
 ---
 run_id: {{RUN_ID}}
-type: brief | spec | plan | pr-request | escalation
-round: <n>
+type: spec
+round: 1
 ---
+Use type plan for plans. PR requests additionally include type pr-request,
+head_sha (the full Git commit ID) and pr_number. Source filenames are spec-v1.md,
+plan-v1.md and prr-123-v1.md, incrementing the phase's version on each content round.
+Versions are immutable after request; write a new version to change content.
 
-REVIEW ROUND (applies to SPEC and PLAN phases)
-1. Write the artifact.
-2. Create the review task. The --spec string is a FIXED TEMPLATE, not freehand:
-   every dispatch must carry the same reporting contract, including the PR phase.
-   Shortening it degrades reviewer compliance and silently leaves tasks open.
-   orca orchestration task-create --task-title "Review <file> (run {{RUN_ID}})" \
-     --display-name "<phase> review r<n>" \
-     --spec "Review <abs path to file> per your rubric.
-             Write <abs path>/cr-<source-filename>.md with YAML frontmatter whose
-             'source:' field is the EXACT source filename, and whose 'status:' is
-             approved or changes_requested.
-             Answer all five rubric items as explicit numbered sections. A review
-             without the five numbered sections is incomplete and will be rejected.
-             Report worker_done with the status in the subject, --report-path
-             pointing at your cr file, AND --task-id <taskId> --dispatch-id
-             <dispatchId>. Omitting those two IDs leaves this task open forever." --json
-3. orca orchestration dispatch --task <taskId> --to {{REVIEWER_HANDLE}} --inject --json
-4. orca orchestration check --wait --types worker_done,escalation,decision_gate \
-     --timeout-ms 900000 --json
-5. Read the AUTHORITATIVE status from the frontmatter of the cr file at
-   --report-path, not from the message subject. If they disagree, the file wins
-   and you log the discrepancy.
-5b. VERIFY THE TASK CLOSED: run `orca orchestration task-list --json` and confirm
-   this task's status is "completed", not "dispatched". A task still showing
-   "dispatched" after a worker_done means the reviewer omitted --task-id or
-   --dispatch-id. Log it and re-request a properly tagged worker_done before
-   continuing; do not proceed on an unclosed task.
-5c. REJECT OFF-CONTRACT REVIEWS: if the cr file lacks the five numbered rubric
-   sections, treat the review as incomplete regardless of its status. Log it and
-   re-dispatch the same round once, quoting the missing sections. This does not
-   consume a round.
-6. changes_requested -> address every numbered item, write the next version
-   (increment round, never edit in place), dispatch a new review task.
-7. TIMEOUT IS A CHECKPOINT, NOT A FAILURE. On timeout run
-   `orca orchestration task-list --json` and `orca terminal read --terminal
-   {{REVIEWER_HANDLE}} --json`. If the reviewer is still active, wait again.
-   Only treat it as a stall when state shows no progress.
-8. Max 3 rounds per phase. On round 3 without approval, write escalation.md with
-   both positions and your recommendation, then:
-   orca orchestration ask --to <your handle> \
-     --question "Round 3 unresolved: <summary>" \
-     --options "accept-reviewer,accept-planner,revise-spec" --timeout-ms 600000 --json
-   Write the resolution into escalation.md and continue accordingly.
+SPEC → PLAN → EXECUTION
+1. SPEC: problem, goals, non-goals, user behavior, testable acceptance criteria
+   grounded in the brief/issue, and resolved open questions. No implementation
+   details. Request review and wait for controller acceptance.
+2. PLAN: technical approach, files, migration/rollback, edge cases and test strategy,
+   each mapped to the approved spec. Request review and wait for acceptance.
+   Approved spec and plan are frozen. If new evidence requires a scope change,
+   record escalation.md and pause for a human decision; a changed specification
+   needs a new run, never an in-place edit or a bypass of an existing approval.
+3. EXECUTE: implement the approved plan in this worktree. Use bounded subagents
+   where useful. Commit the code so tracked code is clean, then run `gate`.
+   A nonzero exit, timeout, changed worktree or changed HEAD is a failed gate.
+   Inspect the recorded result, fix the cause and rerun; do not open a PR without
+   successful gate evidence for the current clean HEAD.
 
-PHASE 1: SPEC (the WHAT)
-Write spec-v1.md: problem statement, goals and explicit non-goals, user-facing
-behavior, acceptance criteria (derived from the brief/issue), out-of-scope list,
-open questions resolved with your recommendation. No implementation details.
-Run the review round until approved.
+PR REVIEW AND FINALIZATION
+Open/update the PR and verify its remote head is the same commit as local HEAD.
+Write prr-<number>-v<round>.md with the required fields, URL, title and summary,
+then `request --source <basename>`. The reviewer assesses that exact SHA.
+After any correction: commit, rerun `gate`, push, verify the remote head and publish
+an incremented PR request. An old review, comment or gate cannot approve a new SHA.
+When the controller accepts the PR approval, ensure the reviewer's
+lessons-proposals.json is published, then run
+`finalize --lessons "{{RUNS_ROOT}}{{RUN_ID}}/lessons-proposals.json"`.
+An empty JSON list is valid when there are no lessons. The controller persists
+memory in refs/agent-duo/learning separately from the approved code and marks the
+run completed. Do not edit/read reviewer memory to steer the review. Do not push
+the memory ref implicitly. Write the final summary and stop only after `status`
+reports completed. GitHub comments are human-facing evidence; no magic approval
+comment controls this run. No automatic merge is part of this workflow.
 
-PHASE 2: PLAN (the HOW) - only after spec approval
-Write plan-v1.md: technical approach, files to touch, migration/rollback notes,
-edge cases, test strategy, each mapped to the APPROVED spec's acceptance criteria.
-The approved spec is FROZEN. If planning reveals it must change, do not edit it;
-escalate. Run the review round until approved.
-
-PHASE 3: EXECUTE - only after plan approval
-Implement with subagents in the worktree.
-DETERMINISTIC GATE, no exceptions: {{GATE_COMMANDS}}
-Do not open a PR until the gate passes. Log gate results.
-
-PHASE 4: PR
-Open the PR. Write prr-<PR_NUMBER>.md with the PR URL, number, title, summary.
-Dispatch a PR review task to {{REVIEWER_HANDLE}}. Address comments and push,
-logging each cycle, until a PR comment contains exactly "PR APPROVED".
-Then write a final summary to log.md and stop.
+ORCA SIGNALING
+Reviewer terminal: {{REVIEWER_HANDLE}}. Durable controller state survives an Orca
+restart; terminal/task handles do not. Read the current Orca orchestration guide
+before using its CLI, and reacquire handles through the launcher on resume.
+For EVERY controller request (spec, plan or each PR SHA), create and dispatch a
+review task to the current reviewer. Use this reporting contract without shortening:
+"Review the current controller request <request_id> at <absolute run directory>.
+Read current controller status and your rubric. Publish cr-<source-basename> with
+all five numbered headings and exact request metadata, then run controller accept.
+Report worker_done with --task-id <taskId>, --dispatch-id <dispatchId> and
+--report-path <absolute review path>, including the controller outcome. On failure,
+report the error instead of claiming approval. Retrying delivery is idempotent."
+Messages are wakeups and audit information. Inspect their type and IDs; an escalation
+or decision message is not a review result. Use bounded native waits of at most
+30 seconds, then check controller status. A lost message or closed/missing Orca task
+does not undo an already accepted controller result. Reconstruct a task for a still
+pending controller request after restart, without inventing a new review round.
+Direct unresolved decisions to the human; never ask your own terminal for authority
+or interpret a timeout as a ruling.

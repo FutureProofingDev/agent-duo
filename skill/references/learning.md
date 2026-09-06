@@ -1,76 +1,78 @@
-# Cross-run learning (per-repo)
+# Cross-run learning
 
-A per-repo memory that lets the reviewer improve run over run WITHOUT a human
-editing prompts. Scoped to one repo: a lesson from repo A never reaches repo B.
-Lessons live in the repo, versioned and PR-reviewable.
+Memory is per repository and advisory. The reviewer reads it to direct attention;
+the planner does not use it as an accusation or preemptive checklist. Review each
+artifact on its evidence and keep style/preferences non-blocking.
 
-## Files
+## Durable store
 
-- `docs/agent-duo/lessons.md`         active + dormant lessons (the memory)
-- `docs/agent-duo/lessons-pending.md` candidate lessons awaiting a second sighting
+The controller stores a completed-run ledger and lessons in the local Git ref
+`refs/agent-duo/learning`, including readable `lessons.md` and
+`lessons-pending.md`. Read it with:
 
-Both are committed. `runs/` is gitignored; these two are NOT.
-
-## Lesson shape
-
-```
-- id: L3
-  pattern: Plans freeze template variables at scheduling-time when the spec requires send-time rendering
-  scope: spec | plan | pr
-  first_seen: 2026-07-23 (run 514)
-  last_confirmed: 2026-07-26 (run 535-a)
-  confirmations: 3
-  status: active | dormant
+```bash
+python3 /absolute/path/duo-state.py memory --run-dir /absolute/run/directory
 ```
 
-## The four safeguards (why this learns instead of accumulating noise)
+`memory` returns JSON `{runs, lessons}`; filter lessons by `status: active` for the
+review checklist. Git worktrees in the same repository share this ref, so memory
+survives branch changes and completed-run cleanup. It is committed independently
+of the code branch; finalization does not dirty or amend the code already reviewed.
+The run itself still needs its run directory for resume and detailed evidence.
 
-1. **Promotion by repetition.** The reviewer never writes straight to
-   lessons.md. It appends a CANDIDATE to lessons-pending.md. A candidate becomes
-   `active` in lessons.md only when the SAME pattern is seen in a DIFFERENT run.
-   One-time blocks stay pending and never become dogma. This is the core
-   noise filter: a lesson must recur to earn authority.
+Memory is local unless explicitly shared. It is not included in the code PR and
+is not implicitly pushed. For intentional cross-machine sharing, a user can push
+`refs/agent-duo/learning:refs/agent-duo/learning` to an appropriate remote; preserve
+and reconcile divergent histories rather than force-pushing over another machine.
+Legacy `docs/agent-duo/lessons.md` and `lessons-pending.md` remain reference material;
+do not delete them or silently treat them as the new writable store.
 
-2. **Generality filter.** A lesson must be a transferable pattern of PLANNER
-   BEHAVIOR, never a fact about the code. Transferable: "plans skip org-ownership
-   validation on new FKs." Not a lesson: "trigger_stage_id needs an org check."
-   The first helps the next unrelated feature; the second is just this bug. If
-   it names a specific symbol, table, or file, it is too specific to persist.
+## Proposals and finalization
 
-3. **Advisory, not a gate.** Active lessons are injected into the REVIEWER as a
-   "watch for these" checklist, never into the planner as an accusation, and
-   never as an automatic block. The reviewer still judges each artifact on its
-   own merits; lessons only direct attention. Feeding "you always cut scope" to
-   a planner invites overcorrection, so planners never read lessons.
+Before submitting the final approved PR review, the reviewer atomically publishes
+`lessons-proposals.json` in the run folder. Write `[]` if there are no lessons.
+Otherwise use a list with this shape:
 
-4. **Decay.** When an active lesson is not confirmed for 5 completed runs, the
-   reviewer sets it `dormant`. A pattern you fixed (e.g. via a prompt change)
-   stops recurring, its counter stalls, and it retires itself. Lessons can die,
-   so the memory tracks current reality rather than an ever-growing history.
+```json
+[
+  {
+    "pattern": "Plans omit ownership validation for new relationships",
+    "scope": "plan",
+    "evidence": ["cr-plan-v1.md", "plan-v2.md"],
+    "resolution": "verified"
+  }
+]
+```
 
-## Reviewer procedure
+`scope` identifies a phase or area, such as `spec`, `plan`, `pr` or `API`. Evidence paths are relative to this run folder
+and must exist. `resolution` is `accepted` or `verified`; an unaccepted allegation
+or reviewer preference is not a lesson. The reviewer supplies substantive evidence
+of the finding and its resolution; checking path existence cannot establish that
+the reasoning is true. Generalize the behavior, avoiding specific symbols/tables.
 
-At run start (all phases):
-- Read lessons.md. Treat entries with `status: active` as an extra checklist of
-  where planners have historically erred IN THIS REPO. Do not auto-block on them.
+After controller acceptance of the final PR review, the planner calls:
 
-At run end (after the PR is approved, or the run escalates/stops):
-- For each distinct pattern you blocked on this run that passes the generality
-  filter, check lessons-pending.md and lessons.md:
-  - Already `active`: bump `confirmations`, set `last_confirmed` to this run.
-  - Present in pending (seen once before, in a different run): PROMOTE it to
-    lessons.md as `active`, confirmations: 2.
-  - Not seen before: append it to lessons-pending.md as a candidate with this
-    run id. Do not add to lessons.md.
-- Decay pass: for each `active` lesson whose `last_confirmed` is 5+ completed
-  runs old, set `status: dormant`.
-- Never delete lessons; dormant is the terminal state, so history is auditable.
+```bash
+python3 /absolute/path/duo-state.py finalize --run-dir /absolute/run/directory --lessons /absolute/run/directory/lessons-proposals.json
+```
 
-## Why per-repo, not global
+The controller validates and persists proposals, records this completed run once,
+and only then marks it completed. A retry is idempotent. Both agents wait for that
+state instead of stopping when a GitHub comment appears. Escalated or stopped runs
+may preserve proposals for inspection, but do not count as completed observations.
 
-A planner's failure modes are shaped by the repo's conventions, stack, and prior
-decisions. "Cuts scope in this codebase" is often true where a cross-repo
-universal would be false. Per-repo keeps lessons honest and lets them travel with
-the code they describe. A global store was considered and rejected: it would mix
-signal from unrelated codebases and needs conflict resolution that per-repo
-avoids entirely.
+## Promotion, decay and recurrence
+
+- A first accepted/verified observation is pending. Two distinct completed runs
+  confirming the same pattern make it active; repeated phases or retries in one
+  run count once.
+- Confirmation updates the lesson against the durable sequence of completed runs,
+  not dates, alphabetical run IDs, poll counts or number of attempted runs.
+- Five completed runs without confirmation make an active lesson dormant.
+- A later confirmed recurrence reactivates a dormant lesson while retaining history.
+- Never turn active lessons into automatic rejection rules or copy them across
+  unrelated repositories.
+
+A per-repository Git ref provides one durable update point for concurrent runs.
+The controller owns serialization and ledger deduplication; agents propose findings
+rather than editing counters or racing to rewrite shared memory files.

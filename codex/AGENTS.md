@@ -1,67 +1,59 @@
-# AGENTS.md — Agent Duo (Codex side)
+# Agent Duo participation guidance
 
-<!-- This file is read by a Codex agent that IS one of the two duo agents during
-a run (its role is set by the prompt it received). To START a run as a human,
-use the skill instead: $agent-duo (installed under .agents/skills/), or bin/duo.sh. Same protocol either way. -->
+This file applies when Codex is already participating in a duo run. The received
+prompt assigns PLANNER/EXECUTOR or REVIEWER. To start a new run, use `$agent-duo`
+or the packaged launcher. Locate the installed skill's `references/protocol.md`
+(or this checkout's `skill/references/protocol.md`) and use the actual absolute
+controller/run paths supplied in the resolved prompt.
 
-You are one half of a two-agent workflow. Your role — PLANNER/EXECUTOR or REVIEWER — is
-assigned by the prompt you were given at session start. Read `../skill/references/protocol.md` before acting;
-it is the contract both agents share, and the other agent is following the same document.
-
-## The loop
+## Shared contract
 
 ```
-brief → SPEC (approved) → PLAN (approved) → execute → gate → PR (approved)
+brief/issue → spec review → plan review → implementation → gate → PR review → finalize
 ```
 
-Each arrow is a review round. Artifacts are markdown files with YAML frontmatter in
-`docs/superpowers/runs/<run_id>/`. There is no shared memory and no direct messaging
-between agents: the filesystem is the message bus.
+Run artifacts default to `docs/agent-duo/runs/<run_id>/`. Both agents share the
+same dedicated worktree. The Python controller is authoritative for phase,
+request identity, artifact hash, reviewer, round/retry limits, gate evidence and
+completion. Orca messages are optional notifications around that durable state.
 
-## Non-negotiables
+- Start with controller `status`, including after restarts. Process pending work
+  even if its creation notification was missed.
+- Publish complete files with temporary-write/atomic-rename. Versions become
+  immutable on request; accepted spec/plan stay frozen. A revised specification
+  needs human scoping and a new run.
+- Source names are spec-v1.md, plan-v1.md and prr-123-v1.md. Review names prefix
+  `cr-` once, preserving a single .md extension.
+- Every review includes exact pending request metadata and five numbered Markdown
+  headings with evidence. Only controller `accept` advances the workflow.
+- Commit implementation changes before running controller `gate`. A new code SHA
+  needs a new gate and PR review. Reviewer checks GitHub's remote head matches the
+  request and local commit; controller verifies the local evidence.
+- Use bounded `wait` calls and `heartbeat` for real progress. Honor controller
+  escalation/deadlines; no agent-side poll counter or self-issued human ruling.
+- Keep timestamped notes in your own log-planner.md or log-reviewer.md.
 
-- **Parse frontmatter, not prose.** Status is `approved` / `changes_requested` in the
-  frontmatter. Never infer approval from encouraging language in a review body.
-- **Ignore other runs.** Act only on files whose `run_id` matches your own.
-- **Version, never overwrite.** `spec-v1.md`, `spec-v2.md`, ... Same for plans.
-- **The approved spec is frozen.** If execution reveals the spec must change, write
-  `escalation.md`. Never silently edit an approved artifact.
-- **The gate is not advisory.** Tests, lint, and build must pass before a PR opens.
-- **Circuit breaker.** 20 polls with nothing new → write a STALL line to `log.md` and exit.
-- **Log every action** as a timestamped line in `log.md`.
+## Roles
 
-## Role boundaries
+The planner implements, publishes sources with `request`, handles findings and
+runs gates. The reviewer judges the appropriate spec/plan/PR rubric, publishes a
+review and calls `accept`. Retry the same successful submission idempotently if
+transport delivery is uncertain; do not create a new content round for delivery.
+Style/naming/optional improvements remain non-blocking. Later reviews assess both
+the changed content and assumptions affected by it, then verify previous blockers.
 
-| Rule | Owner |
-|---|---|
-| Round caps (max 3 per phase), escalation | planner |
-| Approval bar and rubrics | reviewer |
-| Quality (tests/lint/build) | the deterministic gate, not either agent |
+The reviewer reads controller `memory` as advisory context and publishes validated,
+generalized learning proposals before its final PR acceptance. The planner invokes
+`finalize` so the completed-run ledger and memory are committed to local
+`refs/agent-duo/learning` independently of approved code. Preserve legacy lesson
+files, and do not push the memory ref implicitly.
 
-Never take on a rule the other role owns. Two agents both counting rounds is how a run
-deadlocks or double-exits.
+Both roles stop successfully only after controller status is completed. GitHub
+comments do not control completion, and no automatic merge is authorized by this
+protocol. Resume uses the saved state; escalation requires a real human ruling
+recorded with `resume --reason TEXT`.
 
-## As REVIEWER
-
-Judge spec and plan differently. Spec review asks whether this is the right thing to build:
-faithful to the brief, testable acceptance criteria, explicit non-goals, no implementation
-detail. Plan review asks whether it is the right way to build it, measured against the
-approved spec.
-
-Approve when the artifact is sound and complete for its purpose. Style, naming, and optional
-improvements are non-blocking notes — never blockers. Blocking on preference is the main way
-this loop burns rounds without producing value.
-
-## As PLANNER/EXECUTOR
-
-Address every numbered item before requesting re-review. When you disagree with a review item,
-say so in the next version's body with reasoning rather than silently ignoring it — an
-unaddressed item that reappears in round 3 is what triggers escalation.
-
-## Prompts
-
-`../skill/assets/planner.md` and `../skill/assets/reviewer.md` are the file-mode templates;
-`../skill/assets/planner-orca.md` and `../skill/assets/reviewer-orca.md` are the orchestration-mode
-ones. In normal use `bin/duo.sh` fills them for you. Fill every `{{PLACEHOLDER}}`
-before use; each contains two commented variants (issue-backed run vs brief-backed run) —
-keep the one that matches and delete the other.
+Both agents can invoke this local controller and write the worktree. Its checks
+prevent lifecycle mistakes; they do not authenticate mutually hostile agents.
+External GitHub actions still require the user's authorization and environment
+permissions.

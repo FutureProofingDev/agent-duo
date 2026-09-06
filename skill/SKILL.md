@@ -1,196 +1,117 @@
 ---
 name: agent-duo
-description: Generate paired prompts for an automated two-agent planner/reviewer workflow in Orca ADE (or any multi-agent IDE) that takes any work item (a GitHub issue, a pasted bug report, a feature description, or a brand-new feature idea) from spec to approved PR with zero human intervention between checkpoints. One agent plans and executes, a second decorrelated agent reviews plans and PRs; either model can take either role (Opus planning + Sol reviewing, Sol planning + Opus reviewing, any pair). Coordination happens through frontmatter-tagged markdown files in a per-run folder. Use this skill whenever the user wants to set up an agent duo, agent pair, planner/reviewer loop, automated code review loop, multi-agent workflow for an issue/bug/feature, or says things like "arma el duo para esto", "generate the duo prompts", "run the two-agent loop", or mentions cr-*.md / prr-*.md handshake files.
+description: Set up a paired planner/executor and reviewer workflow for a GitHub issue, bug report or feature brief. Generate or launch the two prompts with a durable Python controller that manages spec, plan, gate and exact-commit PR reviews. Use when the user asks for an agent duo, paired review loop, duo prompts or the agent-duo workflow. Either model can fill either role.
 ---
 
-# Agent Duo: Planner + Reviewer Loop
+# Agent Duo
 
-Generates the two prompts that drive an automated planner/executor + reviewer
-pair working any work item through spec → plan → execute → approved PR.
-The spec phase judges the WHAT (right thing to build), the plan phase judges
-the HOW (right way to build it), each is a separately reviewed and approved
-artifact. Brainstorming stays outside the duo: it is human-driven and
-divergent; its output becomes the brief that seeds the run. The agents coordinate
-through markdown files with YAML frontmatter in a per-run folder. No shared
-memory, no direct messaging: the filesystem is the protocol.
+Two agents take a work item through reviewed spec, reviewed plan, implementation,
+checks, exact-commit PR review and durable finalization. The agents supply technical
+judgment; `duo-state.py` controls the transitions. Brainstorming remains outside
+this workflow and can provide its initial brief.
 
-## What the user must provide
+## Inputs and defaults
 
-Collect these before generating. If any are missing, ask once, concisely:
+Use information and authorization already provided. Ask once for genuinely missing
+work or a gate command; do not generate a runnable prompt containing a fake gate.
 
-1. **Work item** can be any ONE of:
-   - A GitHub issue URL
-   - A pasted description of a bug, problem, or feature
-   - A rough idea for a brand-new feature ("we need X")
-   See "Work item handling" below for how each shapes the prompts.
-2. **Role assignment**: which model is PLANNER/EXECUTOR and which is REVIEWER.
-   The roles are model-agnostic: Opus planning + Sol reviewing works, and so
-   does the inverse. If the user doesn't say, ask, never assume a default
-   direction. The only requirement worth stating: the pair should be
-   decorrelated (different vendors/training) so their failure modes differ.
-3. **run_id** default: `<issue-number>-a` when there's an issue, otherwise a
-   short kebab slug of the work item + `-a` (e.g. `email-dedup-a`).
-   Increment the letter for retries.
-4. **Runs folder root** default: `docs/agent-duo/runs/`
-5. **Transport mode** - `file` (default, portable) or `orchestration`
-   (Orca-native). Ask only if the user mentions Orca or orchestration;
-   otherwise default to `file` and mention orchestration exists.
-   See "Transport modes" below.
-6. **Deterministic gate command(s)**, the test/lint/build commands that must
-   pass before a PR opens. If unspecified, insert a placeholder
-   `<GATE: tests + lint + build commands here>` and tell the user to fill it in.
+- Work item: a GitHub issue URL or a literal pasted description/brainstorm result.
+- Role assignment: honor the user's choice. Launcher defaults are planner Claude,
+  reviewer Codex; use different models where practical without promising statistical
+  independence. Either direction is supported.
+- Run ID: a fresh 1–64 character ID, starting with a letter/digit and continuing
+  with letters/digits/underscores/hyphens. Suggest `612-a` for an issue or a short
+  work slug with a retry suffix. Do not overwrite an existing run to retry.
+- Gate: real repository commands from the user, repository instructions or
+  `DUO_GATE`, passed through `--gate` when needed. No placeholder is a valid gate.
+- Transport: the launcher defaults to `orchestration` in Orca. Use `file` for
+  manual portable sessions or when explicitly chosen. Both require macOS/Linux,
+  Python 3.9+ and Git.
+- Run folder root: `docs/agent-duo/runs/`, resolved within the run worktree.
 
-## Work item handling
+A brief is captured verbatim by the launcher in brief.md. In manual setup create
+it before planning. For an issue, both agents read the full source. The spec review
+checks that the derived criteria faithfully cover the source without invented scope.
 
-The protocol is identical in all cases; only the source of truth changes.
+## Prefer the launcher for execution
 
-- **GitHub issue**: the issue is the source of truth. The planner reads it;
-  the reviewer's rubric checks the plan against the issue's acceptance criteria.
-- **Pasted description / new feature (no issue)**: capture the user's text
-  verbatim into a `brief.md` (type: brief) that the generated planner prompt
-  instructs the agent to write as its first action, quoting the work statement
-  exactly. The planner derives explicit acceptance criteria in the SPEC phase,
-  and the spec review's first rubric item judges whether those criteria are a
-  faithful, complete reading of the brief without invented scope. This makes
-  the criteria themselves a reviewed artifact, crucial when no human wrote
-  them. A brainstorm transcript or its conclusions pasted as the work item is
-  a normal brief run.
-
-## Transport modes
-
-Same protocol, same artifacts, different signaling. The artifacts (spec, plan,
-cr files, frontmatter, rubrics, spec freeze, round caps) are IDENTICAL in both
-modes. Only how agents notice each other's work changes.
-
-- **file** (default): agents poll the run folder; circuit breaker at 20 empty
-  polls. Works in any IDE, trivial to debug by reading a folder.
-- **orchestration** (Orca only, experimental): coordinator/worker dispatches and
-  blocking waits. No polling, no wasted tokens, and timeouts are checkpoints
-  rather than guesses. Read `references/orchestration.md` and use the
-  `-orca` prompt templates.
-
-For orchestration mode the planner is the COORDINATOR (owns round caps, tasks,
-escalation) and the reviewer is a WORKER terminal. That is the same ownership
-split as file mode, expressed in Orca's model.
-
-## How to generate
-
-1. Read `references/protocol.md` for the full artifact protocol (frontmatter
-   schema, filenames, status tokens, ownership rules). Follow it exactly ,
-   both prompts must agree on every filename and token or the handshake stalls.
-2. Fill the two templates in `assets/`:
-   File mode:
-   - `assets/planner.md` → the `/loop` prompt for the planner/executor agent
-   - `assets/reviewer.md` → the `/goal` prompt for the reviewer agent
-   Orchestration mode:
-   - `assets/planner-orca.md` and `assets/reviewer-orca.md`
-     Leave `{{REVIEWER_HANDLE}}` / `{{PLANNER_HANDLE}}` unsubstituted: terminal
-     handles are runtime-scoped and the launcher resolves them at start.
-   Replace every `{{PLACEHOLDER}}` with the collected values. The templates
-   contain `{{WORK_ITEM_BLOCK}}` / `{{RUBRIC_ITEM_1}}` slots whose content
-   depends on the work item type, both variants are given inline in each
-   template; pick the matching one and delete the other.
-3. Write both prompts to the run folder as `planner.txt` and `reviewer.txt`.
-   This keeps the exact prompt text next to `log.md` and the artifacts it
-   produced, so a run is reproducible and a stall is diagnosable later.
-4. Output both prompts in separate fenced code blocks, planner first, each
-   ready to paste into its agent. Label clearly which MODEL gets which prompt
-   (e.g. "→ paste into the Sol agent"), since roles are swappable and mixing
-   them up is the easiest way to break the run.
-5. If the user runs Orca ADE, also fill the launcher and write it to the run
-   folder so the duo starts with one command: `assets/launch.sh` for file mode,
-   `assets/launch-orca.sh` for orchestration mode. See `references/orca.md`.
-   For other IDEs, skip the launcher and let them paste manually.
-6. After the prompts, remind the user of the two operational checks (below).
-
-## Cross-run learning (per-repo)
-
-The reviewer keeps a per-repo memory in `docs/agent-duo/lessons.md` so runs
-improve over time without a human editing prompts. It reads active lessons as a
-"where planners tend to err here" checklist, and after a run proposes new ones.
-A candidate becomes an active lesson only when the same pattern recurs in a
-different run, decays to dormant if unconfirmed for 5 runs, and must be a
-transferable behavior pattern rather than a code fact. Planners never read
-lessons (that would invite overcorrection). Full mechanism in
-`references/learning.md`.
-
-## Invariants (never violate these when customizing)
-
-- **Lessons are advisory and per-repo.** Active lessons steer reviewer
-  attention; they are never auto-block rules and never cross repos. Planners do
-  not read them. A lesson must be a transferable planner-behavior pattern, not a
-  code-specific fact, and must recur before it persists.
-- **Spec before plan, always.** spec-v*.md (what) must be approved before
-  plan-v*.md (how) is written. After approval the spec is FROZEN: if planning
-  or execution reveals it must change, the planner escalates, never silently
-  edits. Skipping the spec phase is only acceptable if the user explicitly
-  asks for it (e.g. trivial bugfix with an issue that already is the spec).
-- **One owner per rule.** The planner owns the round caps (max 3 per phase) and escalation.
-  The reviewer owns the approval bar. The deterministic gate owns quality.
-  Never duplicate a rule into both prompts.
-- **Roles are defined by the prompt, not the model.** Everything role-specific
-  lives in the prompt text; nothing assumes a particular vendor's behavior.
-- **Plans are versioned, never edited in place.** `plan-v1.md`, `plan-v2.md`, ...
-- **Status lives in frontmatter**, not prose. Exact tokens: `approved`,
-  `changes_requested`. PR sign-off is a PR comment containing exactly `PR APPROVED`.
-- **Run isolation, NOT agent isolation.** All artifacts carry `run_id`; agents
-  ignore files from other runs. Each run gets its own folder and ONE git worktree
-  shared by both agents. Never give each agent its own worktree: git worktrees are
-  separate directories, so the file handshake would break and the run would stall
-  silently with no error.
-- **Circuit breaker.** Both agents: 20 empty polls → write STALL to log.md → exit.
-- **Re-review only what changed** between rounds (both sides).
-- **Reviewer never blocks on style.** Style/naming/optional improvements go in
-  non-blocking notes.
-
-## Automating repeat runs
-
-After the first run, prompt generation needs no LLM: it is pure placeholder
-substitution. `bin/duo.sh` (shipped as `assets/duo.sh` in the built skill) does the whole launch in one command.
+In a checkout use `bin/duo.sh`; in the installed built skill use `assets/duo.sh`.
+Both use the same canonical prompt assets and packaged controller. Locate the
+actual executable before invoking it; do not assume the skill is a repository.
 
 ```bash
-duo --task "hide signup in login page" --run-id b
-duo --issue https://github.com/org/repo/issues/612 --run-id 612-a
-duo --task "..." --run-id c --new-worktree     # fresh worktree instead of reuse
+/path/to/duo.sh --task 'Hide signup on the login page' --run-id login-a --gate 'pnpm test:run && pnpm lint'
+/path/to/duo.sh --issue https://github.com/org/repo/issues/612 --run-id 612-a
+/path/to/duo.sh --resume --run-id login-a
 ```
 
-It resets the branch, resolves runtime-scoped terminal handles, fills both
-templates, and sends them reviewer-first.
+The launcher performs preflight, initializes the durable controller, resolves exact
+worktree/agent identities, fills prompts once and saves resolved prompts. It does
+not use terminal titles/previews to guess the receiving agent. Ambiguity requires
+explicit `--planner-terminal` / `--reviewer-terminal` handles. Failed preflight must
+not send a prompt or erase existing work. See [references/orca.md](references/orca.md)
+for branch behavior, flags and resume.
 
-There is ONE launcher, not one per agent. Roles are flags:
+## Generating prompts for manual sessions
 
-```bash
-duo --task "..." --run-id d --planner codex --reviewer claude
-```
+1. Read [references/protocol.md](references/protocol.md). For Orca also read
+   [references/orchestration.md](references/orchestration.md).
+2. Resolve one dedicated worktree and absolute run/controller paths. The controller
+   is `bin/duo-state.py` in the checkout or `assets/duo-state.py` in the built skill.
+   Create the run directory, keep it excluded from code commits, and initialize
+   once with `init --run-dir PATH --run-id ID --worktree PATH --gate
+   COMMAND --reviewer IDENTITY`. In file mode use a stable identity such as reviewer;
+   both templates read it from controller status.
+3. Fill [assets/planner.md](assets/planner.md) and
+   [assets/reviewer.md](assets/reviewer.md) for file mode, or the corresponding
+   `planner-orca.md` / `reviewer-orca.md` for orchestration. Fill `RUN_ID`, `RUNS_ROOT`
+   (absolute path with trailing slash), `CONTROLLER` (absolute path), `GATE_COMMANDS`,
+   `WORK_ITEM_BLOCK` and `SOURCE_OF_TRUTH_BLOCK`. The last two describe the actual
+   issue or existing brief. Orca templates additionally need current terminal handles.
+   Preserve literal work text; do not perform recursive substitution in user text.
+4. Save planner.resolved.txt and reviewer.resolved.txt in the run directory and
+   present the two prompts labeled by role and model. Both sessions start by reading
+   controller status, so already-published work remains discoverable.
+5. When asked to launch, carry out the available authorized launch steps rather
+   than merely printing prompts. When asked only for prompts, stop after supplying
+   them with the initialization command and concrete paths.
 
-`DUO_HOME` can point at either clone (`agent-duo` or `agent-duo-codex`) and at
-either a repo root or the skill folder; the script probes the known layouts.
-Set `DUO_GATE` to the repo's gate commands.
+There are no separate launch.sh / launch-orca.sh templates. Do not invent missing
+assets or duplicate the launcher logic in a slash-command body.
 
-Generate prompts through this skill when the task needs scoping judgment, and
-through `duo.sh` when the parameters are already known. Same templates, so the
-output is identical.
+## Invariants
 
-## Operational checks to relay to the user
+- One run, one worktree shared by both agents. Existing versions are immutable.
+- Spec precedes plan; accepted spec/plan remain frozen. A changed specification
+  needs human scoping and a new run.
+- Publish sources/reviews atomically. `request` records source hash and request ID;
+  `accept` validates those plus run, round, reviewer and five numbered sections.
+- Every artifact type has five explicit review criteria, including PR. Evidence
+  and technical completeness determine the verdict; style and optional work do not.
+- Gate execution is controller-owned and bound to clean HEAD. Each code change
+  requires a new commit, gate and PR review for the new SHA. Remote PR head equality
+  is verified by the reviewer; local controller checks are not a GitHub API check.
+- Messages and GitHub comments convey information. Only accepted controller state
+  advances the workflow. Successful delivery retries are idempotent.
+- Controller deadlines replace poll-count exits. Start with status, wait in bounded
+  calls and heartbeat real progress. Preserve state for resume and human rulings.
+- Reviewer publishes learning proposals before its final PR acceptance. Planner
+  calls finalize; both finish only when status reports completed.
 
-1. **Dry-run the handshake first** on a throwaway work item. The weak link is
-   whether the IDE's polling actually wakes each agent on file changes. Watch
-   `log.md` from both sides during the dry run. If using the Orca launcher,
-   also verify the jq field paths against real `--json` output on this run.
-2. **The gate placeholder must be real commands** before a production run ,
-   the planner will treat whatever is there as the ship condition.
+## Learning and limits
 
-## Customizations users commonly ask for
+[references/learning.md](references/learning.md) describes the local Git ref
+`refs/agent-duo/learning`: evidence-backed proposals, confirmation in two distinct
+completed runs, decay after five unconfirmed completed runs, and reactivation.
+The durable ledger is per repository and advisory. It does not dirty approved code
+or silently join its PR, and it is not pushed remotely without explicit intent.
+Keep legacy lesson files as reference material.
 
-- Different round cap → change it in the planner prompt only.
-- Extra rubric items (security, performance budgets) → add to the reviewer's
-  rubric section; keep items answerable yes/no with evidence.
-- Parallel runs → one run_id + folder + worktree per work item; nothing else changes.
-- Human-in-the-loop checkpoint before execution → add to the planner: after
-  approval, write `ready.md` and wait for the human to edit it with `go`.
-- Switch transport mid-project → regenerate prompts in the other mode; artifacts
-  and any in-flight run folder stay valid, since only signaling differs.
-- Skip the spec phase (trivial bugfix) → remove Phase 1 from the planner and
-  the spec rubric from the reviewer; the issue serves as the spec.
-- No PR at all (spike/prototype) → drop Phase 4 from the planner and the PR
-  section from the reviewer; the run ends at the gate.
+This controller protects cooperating agents from stale evidence and lifecycle
+mistakes; it does not authenticate agents sharing filesystem permissions. A gate
+is only as meaningful as the commands configured. External pushes, GitHub comments
+and PR creation still follow user authorization and environment permissions.
+
+Run a throwaway handshake before relying on a new IDE/Orca version. Customize the
+rubric with real evidence, and change controller behavior/tests together when
+changing lifecycle rules; deleting a prompt phase cannot bypass controller order.
