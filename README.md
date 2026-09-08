@@ -1,5 +1,10 @@
 # agent-duo
 
+A paired coding workflow for Codex, Claude Code and other agents with local tool
+access. **Orca is optional:** the controller and Markdown protocol work with two
+sessions in one shared worktree. Orca adds automatic session/worktree setup and
+message delivery.
+
 A planner/executor and a reviewer take a GitHub issue or feature brief through:
 
 ```
@@ -30,28 +35,129 @@ does not turn an end-to-end run into a planning-only session.
 
 | Capability | Requirements |
 |---|---|
-| Portable file workflow | macOS or Linux, Python 3.9+, Git, two local agent sessions, repository checks |
-| One-command launcher | Above, plus Bash and Orca ADE/CLI |
+| Portable file workflow | macOS or Linux, Python 3.9+, Git, Bash, two local agent sessions, repository checks |
+| One-command launcher | Above, plus Orca ADE/CLI |
 | Orca orchestration transport | Experimental orchestration enabled in Orca |
 | PR creation and inspection | Authorized GitHub connector or CLI access |
-| Required verdict publication | Authorized gh CLI session with PR read/comment permission |
+| Verdict publication and finalization | Authorized `gh` CLI session with PR read/comment permission |
+| Building the installable bundle | Above local tools, plus `zip` |
 
 The controller uses the Python standard library. Its local checks protect
 cooperating agents from mistakes; they are not an authentication boundary against
 agents that can edit the same files. The reviewer verifies the remote PR head
 through GitHub; the controller checks local HEAD and stored evidence and rechecks
-the remote head when publishing the verdict. Local controller commands do not
-need GitHub access; the publication command invokes gh.
+the remote head when publishing the verdict. Planning, gates and local state
+commands work offline; publication and finalization need GitHub access. Finalize
+rechecks the remote HEAD and the published comment before completing a new run.
+The publication command currently targets `github.com`; GitHub Enterprise hosts
+are not configurable.
+
+## Install or update for the team
+
+Clone the repository once, then build a complete bundle from `main`:
+
+```bash
+git clone https://github.com/FutureProofingDev/agent-duo.git "$HOME/src/agent-duo"
+cd "$HOME/src/agent-duo"
+./build.sh
+```
+
+For an existing clean clone, update it instead of cloning again:
+
+```bash
+cd "$HOME/src/agent-duo"
+git switch main
+git pull --ff-only origin main
+./build.sh
+```
+
+Keep local customizations in a separate branch. A failed pull or build must be
+resolved before installing its output.
+
+### Update all default user installations
+
+Run this block **from the agent-duo clone after a successful build**. It installs
+the same bundle in the three default user locations, moving existing copies to a
+backup first. Staging a complete folder removes stale files from the active
+installation; it does not overlay a new controller onto old templates.
+
+```bash
+(
+  set -eu
+  duo_bundle="$PWD/dist/agent-duo"
+  test -f "$duo_bundle/SKILL.md"
+  python3 "$duo_bundle/assets/duo-state.py" protocol
+  mkdir -p "$HOME/.local/share/agent-duo/backups"
+  duo_backup="$(mktemp -d "$HOME/.local/share/agent-duo/backups/update.XXXXXX")"
+  echo "Previous installations: $duo_backup"
+
+  for duo_app in agents codex claude; do
+    duo_parent="$HOME/.$duo_app/skills"
+    duo_target="$duo_parent/agent-duo"
+    mkdir -p "$duo_parent"
+    duo_stage="$(mktemp -d "$duo_parent/.agent-duo.XXXXXX")"
+    cp -R "$duo_bundle" "$duo_stage/agent-duo"
+    chmod +x "$duo_stage/agent-duo/assets/duo.sh" "$duo_stage/agent-duo/assets/duo-state.py"
+    python3 "$duo_stage/agent-duo/assets/duo-state.py" protocol
+
+    if [ -e "$duo_target" ] || [ -L "$duo_target" ]; then
+      mv "$duo_target" "$duo_backup/$duo_app"
+    fi
+    if ! mv "$duo_stage/agent-duo" "$duo_target"; then
+      if [ -e "$duo_backup/$duo_app" ] || [ -L "$duo_backup/$duo_app" ]; then
+        mv "$duo_backup/$duo_app" "$duo_target"
+      fi
+      exit 1
+    fi
+    rmdir "$duo_stage"
+    echo "Installed: $duo_target"
+  done
+)
+```
+
+Each protocol check should print `{"protocol_version": 2}`. These are the default
+directories for Codex (`~/.agents/skills`), the older Codex location
+(`~/.codex/skills`) and Claude Code (`~/.claude/skills`). The script leaves other
+skills alone. Repository-local `.agents/skills/agent-duo` or
+`.claude/skills/agent-duo` copies, custom installation paths and existing run
+snapshots must be handled separately; a global update does not rewrite them.
+
+Choose the installed bundle and **open new agent sessions**:
+
+```bash
+export DUO_HOME="$HOME/.agents/skills/agent-duo"
+python3 "$DUO_HOME/assets/duo-state.py" protocol
+gh auth status
+```
+
+If `DUO_HOME` is set in your shell startup file, update that existing setting too.
+Run `gh auth login` if needed. In Codex invoke `$agent-duo`; in Claude Code invoke
+`/agent-duo` through the installed skill. Tell it the task, both roles, gate and
+whether you want manual file transport or the Orca launcher.
+
+To share with the team, distribute `dist/agent-duo.skill` or give teammates access
+to this repository and the steps above. Build outputs are generated, not committed
+release assets. Upload the `.skill` where supported, or extract its `agent-duo/`
+folder into a skill directory. Each agent still needs access to the shared
+worktree and the required local commands. Do not install only `skill/SKILL.md` or
+copy the source `skill/` folder: the build adds both executables to `assets/`.
 
 ## Quick start with Orca
 
+From the **target application repository**, with Orca connected and its agent CLIs
+configured, create a new shared worktree and both role terminals:
+
 ```bash
-git clone https://github.com/FutureProofingDev/agent-duo.git /path/to/agent-duo
-export DUO_HOME=/path/to/agent-duo
+cd /absolute/path/to/target-repository
+export DUO_HOME="$HOME/.agents/skills/agent-duo"
 export DUO_GATE='pnpm test:run && pnpm lint'
-/path/to/agent-duo/bin/duo.sh --task 'Hide signup on the login page' --run-id login-a
-/path/to/agent-duo/bin/duo.sh --issue https://github.com/org/repo/issues/612 --run-id 612-a
+"$DUO_HOME/assets/duo.sh" --task 'Hide signup on the login page' --run-id login-a --new-worktree
 ```
+
+Or use `--issue https://github.com/org/repo/issues/612 --run-id 612-a` instead of
+`--task ... --run-id login-a`. Omit `--new-worktree` only when the current Orca
+worktree already has both agent terminals. A Setup shell is not an agent terminal.
+To run from source instead, set `DUO_HOME` to the clone and use its `bin/duo.sh`.
 
 Use real gate commands for your repository; supply them via `--gate` or `DUO_GATE`.
 There is no project-specific fallback test command. New runs require exactly one
@@ -62,9 +168,15 @@ The launcher validates protocol version, template role/transport markers, requir
 tokens, worktree and structured agent identities before sending anything. Protocol 2
 comes from `duo-state.py protocol`; each canonical prompt has its HTML marker on
 line 2. Keep the launcher, controller and templates from one bundle. New runs save
-resolved prompts and hashes alongside state and preserve the literal brief. Default roles are planner Claude and reviewer Codex; switch them with
+the original templates, their hashes, controller provenance and resolved prompts
+alongside state, preserving the literal brief. Hashes cover the original template
+snapshots; resume regenerates resolved prompts from those snapshots. The renderer
+removes HTML comments, so resolved launcher output does not retain the marker.
+Default roles are planner Claude and reviewer Codex; switch them with
 `--planner codex --reviewer claude`. `--mode orchestration` is the default;
-`--mode file` uses the same controller without native task signaling.
+`--mode file` uses the same controller without native task signaling. **The
+launcher still requires Orca in file mode** to find terminals and deliver prompts.
+For two sessions outside Orca, use [the manual setup](#running-without-orca).
 
 A new run normally gets branch `duo/<run_id>` from the resolved default base
 (origin's configured remote HEAD, otherwise current HEAD), or a base explicitly supplied with `--base REF`. No develop
@@ -77,8 +189,10 @@ resolve terminal ambiguity and are still checked for the correct agent/worktree.
 ## Progress and recovery
 
 ```bash
-python3 /path/to/agent-duo/bin/duo-state.py status --run-dir /worktree/docs/agent-duo/runs/login-a
-/path/to/agent-duo/bin/duo.sh --resume --run-id login-a
+cd /absolute/path/to/the-run-worktree
+export DUO_HOME="$HOME/.agents/skills/agent-duo"
+python3 "$DUO_HOME/assets/duo-state.py" status --run-dir "$PWD/docs/agent-duo/runs/login-a"
+"$DUO_HOME/assets/duo.sh" --resume --run-id login-a
 ```
 
 The run directory keeps controller state, source/review artifacts, gate results,
@@ -88,14 +202,28 @@ directory when you need to resume or inspect evidence. Frontmatter is for the
 run's protocol artifacts; do not add run metadata to README.md or application docs.
 
 Resume refreshes runtime terminal handles and continues the saved phase. It does
-not reset the branch or overwrite the run. After escalation first record the human
-ruling with controller `resume --reason 'the approved recovery decision'`; a timeout
-or an edited comment is not approval. Sources already requested are immutable and
+not reset the branch or overwrite the run. It looks in the current worktree, so
+resume from the worktree printed when the run was created. After escalation first
+record the actual human ruling:
+
+```bash
+python3 "$DUO_HOME/assets/duo-state.py" resume \
+  --run-dir "$PWD/docs/agent-duo/runs/login-a" \
+  --reason 'the approved recovery decision'
+```
+
+A timeout or an edited comment is not approval. Sources already requested are immutable and
 approved spec/plan stay frozen. A revised specification starts a new scoped run.
 Resume also checks saved protocol markers and hashes. Incompatible legacy snapshots
 are rejected: create a new run, import the old approved artifacts as references and
 revalidate them. Preserve the original evidence instead of rewriting it to appear
 current.
+
+Manual runs do not have the launcher's `launcher.json`. For those runs, use
+controller `status` and, when necessary, `resume --reason ...`, then give the saved
+file-mode prompts to the two sessions again. Do not use `duo.sh --resume` for a
+manually initialized run. Launcher resume keeps the saved gate, mode and roles;
+it cannot change them through new launch flags.
 
 Agents use bounded controller waits and meaningful progress heartbeats. There is
 no 20-poll exit during a healthy long implementation. State and elapsed-time budgets
@@ -103,16 +231,26 @@ provide the stopping conditions; missed notifications do not erase pending work.
 
 ## Running without Orca
 
-Use two agent sessions in the same dedicated worktree. Resolve absolute paths and
-initialize a new run once:
+Use two agent sessions with shell/filesystem access in the same dedicated Git
+worktree. Installation alone does not open either session. Ask `$agent-duo` or the
+installed skill to prepare the file-mode prompts using that worktree and a real
+gate; preparation outside Orca is manual, with no `duo prepare` command.
+
+For explicit setup, resolve absolute paths and initialize a new run once:
 
 ```bash
-python3 /path/to/agent-duo/bin/duo-state.py protocol  # requires protocol_version 2
-mkdir -p /worktree/docs/agent-duo/runs/login-a
-python3 /path/to/agent-duo/bin/duo-state.py init   --run-dir /worktree/docs/agent-duo/runs/login-a --run-id login-a   --worktree /worktree --gate 'your test, lint and build commands' --reviewer reviewer
+cd /absolute/path/to/the-dedicated-worktree
+export DUO_HOME="$HOME/.agents/skills/agent-duo"
+duo_run="$PWD/docs/agent-duo/runs/login-a"
+python3 "$DUO_HOME/assets/duo-state.py" protocol  # requires protocol_version 2
+mkdir -p "$duo_run"
+python3 "$DUO_HOME/assets/duo-state.py" init \
+  --run-dir "$duo_run" --run-id login-a --worktree "$PWD" \
+  --gate 'pnpm test:run && pnpm lint' --reviewer reviewer
 ```
 
-Capture the work statement verbatim in the run's brief.md. Fill
+Replace the example gate with your project's actual checks. Capture the work
+statement verbatim in the run's brief.md. Fill
 [skill/assets/planner.md](skill/assets/planner.md) and
 [skill/assets/reviewer.md](skill/assets/reviewer.md): `RUN_ID`, absolute `RUNS_ROOT`
 with a trailing slash, absolute `CONTROLLER`, actual `GATE_COMMANDS`,
@@ -120,7 +258,11 @@ with a trailing slash, absolute `CONTROLLER`, actual `GATE_COMMANDS`,
 than recursively replacing braces inside it. Preserve each line-2 marker and
 use matching protocol-2 templates and controller. Save the resolved prompts beside the
 run state and give each to its assigned session. Both begin by reading `status`,
-so correctness does not depend on which session starts first.
+so correctness does not depend on which session starts first. Installed templates
+are under `$DUO_HOME/assets/`; their controller is
+`$DUO_HOME/assets/duo-state.py`. The leading `/loop` and `/goal` are session-specific
+wrappers; use your agent's equivalent continued-task mechanism if it does not
+support those commands, while retaining the role instructions and protocol marker.
 
 The reviewer atomically publishes a review and calls `accept`. The planner reads
 the controller's new phase, implements corrections and requests the next round.
@@ -136,12 +278,18 @@ actual base for the diff instead of an assumed or stale local main. The final re
 includes five evidence sections and `## Pending manual checks`, listing untested
 acceptance checks or `None.`. Record device/zoom/screen-reader limitations honestly
 and follow the approved acceptance policy for pending checks.
+The PR request body must contain its complete URL, for example
+`https://github.com/OWNER/NAME/pull/123`; publication checks it against `--repo` and
+the recorded PR number.
 
 After local PR review acceptance, publish the verdict and then finalize:
 
 ```bash
-python3 /path/to/agent-duo/bin/duo-state.py publish-review --run-dir /worktree/docs/agent-duo/runs/login-a --repo OWNER/NAME
-python3 /path/to/agent-duo/bin/duo-state.py finalize --run-dir /worktree/docs/agent-duo/runs/login-a --lessons /worktree/docs/agent-duo/runs/login-a/lessons-proposals.json
+duo_run="$PWD/docs/agent-duo/runs/login-a"
+python3 "$DUO_HOME/assets/duo-state.py" publish-review \
+  --run-dir "$duo_run" --repo OWNER/NAME
+python3 "$DUO_HOME/assets/duo-state.py" finalize \
+  --run-dir "$duo_run" --lessons "$duo_run/lessons-proposals.json"
 ```
 
 Publication verifies the live remote HEAD and uses gh to post the accepted review,
@@ -163,26 +311,14 @@ files as reference. Local memory is not included in the code PR; cross-machine
 sharing of the ref is an explicit operation. See
 [the learning reference](skill/references/learning.md).
 
-## Install the skill and commands
+## Optional command wrappers
 
-Run `./build.sh`, then install the resulting skill folder:
-
-| Agent | Installation |
-|---|---|
-| Claude app | Upload `dist/agent-duo.skill` |
-| Claude Code | Copy `dist/agent-duo` to `~/.claude/skills/` |
-| Codex personal | Copy `dist/agent-duo` to `~/.agents/skills/` |
-| Codex repository | Copy `dist/agent-duo` to `.agents/skills/` and commit |
-
-In Codex invoke `$agent-duo`; the skill's invocation policy is explicit-only.
-Reload the agent after installing and replace the complete bundle together,
-including the four templates and controller. Version/token/hash preflight catches
-incompatible bundles before sending prompts. The built skill includes executable
-`assets/duo.sh` and `assets/duo-state.py` as well as all four canonical prompts.
-
-Optional slash-command installations after building:
+The skill installation above is sufficient. If you also use legacy slash-command
+files, refresh them from the agent-duo clone after building so an old wrapper
+cannot shadow the skill:
 
 ```bash
+mkdir -p /path/to/repo/.claude/commands "$HOME/.codex/prompts"
 cp dist/claude-commands/*.md /path/to/repo/.claude/commands/
 cp dist/codex-prompts/*.md ~/.codex/prompts/
 ```
@@ -210,7 +346,7 @@ dist/              generated installation artifacts
 Edit canonical assets and rebuild; do not maintain copied reviewer bodies in
 parallel template trees. Run `python3 -m unittest discover -s tests` and `./build.sh`
 after implementation changes. Regression tests use disposable Git repositories
-and mocked Orca boundaries; they do not launch real agents or publish PRs.
+and mocked Orca/GitHub boundaries; they do not launch real agents or publish PRs.
 Before adopting a new Orca/IDE version, verify a throwaway handshake in that
 specific environment. Useful field findings include stale evidence, false blocks,
 missing criteria, timeouts and recovery behavior.
