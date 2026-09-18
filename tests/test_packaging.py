@@ -57,7 +57,13 @@ class PackagingTests(unittest.TestCase):
 
     def test_installation_includes_executable_launcher_and_controller(self):
         self.assert_builds()
+        license_contents = (self.root / "LICENSE").read_bytes()
+        installed_license = self.root / "dist/agent-duo/LICENSE"
+        self.assertTrue(installed_license.is_file())
+        self.assertEqual(installed_license.read_bytes(), license_contents)
         with zipfile.ZipFile(self.root / "dist/agent-duo.skill") as archive:
+            self.assertIn("agent-duo/LICENSE", archive.namelist())
+            self.assertEqual(archive.read("agent-duo/LICENSE"), license_contents)
             for filename in ("duo.sh", "duo-state.py"):
                 with self.subTest(filename=filename):
                     member = "agent-duo/assets/" + filename
@@ -128,6 +134,10 @@ class PackagingTests(unittest.TestCase):
     def test_missing_launcher_fails_before_replacing_previous_distribution(self):
         (self.root / "bin/duo.sh").unlink()
         self.assert_rejected_preserving_previous_distribution("bin/duo.sh")
+
+    def test_missing_license_fails_before_replacing_previous_distribution(self):
+        (self.root / "LICENSE").unlink()
+        self.assert_rejected_preserving_previous_distribution("LICENSE")
 
     def test_legacy_or_mismatched_prompts_preserve_previous_distribution(self):
         for filename in ("planner.md", "reviewer.md", "planner-orca.md", "reviewer-orca.md"):

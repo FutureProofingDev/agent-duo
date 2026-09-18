@@ -29,7 +29,7 @@ def fail(message):
     raise SystemExit(message)
 
 for relative in (
-    "skill/SKILL.md", "bin/duo.sh", "bin/duo-state.py",
+    "LICENSE", "skill/SKILL.md", "bin/duo.sh", "bin/duo-state.py",
     "commands/agent-duo.md", "commands/agent-duo-review.md",
 ):
     if not (root / relative).is_file():
@@ -102,6 +102,7 @@ mkdir -p "$ROOT/dist"
 
 # --- packaged skill (Claude .skill = zip of the skill folder as agent-duo/) ---
 cp -r "$ROOT/skill" "$ROOT/dist/agent-duo"
+install -m 644 "$ROOT/LICENSE" "$ROOT/dist/agent-duo/LICENSE"
 install -m 755 "$ROOT/bin/duo.sh" "$ROOT/dist/agent-duo/assets/duo.sh"
 install -m 755 "$ROOT/bin/duo-state.py" "$ROOT/dist/agent-duo/assets/duo-state.py"
 (cd "$ROOT/dist" && zip -qr agent-duo.skill agent-duo)

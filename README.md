@@ -72,3 +72,7 @@ Then start a new agent session. Updating the skill preserves existing run histor
 - [Advanced setup, Orca, manual sessions and recovery](docs/advanced.md)
 - [Workflow protocol](skill/references/protocol.md)
 - [Contributing and testing](docs/advanced.md#repository-layout-and-contributing)
+
+## License
+
+Agent Duo is available under the [MIT License](LICENSE).
