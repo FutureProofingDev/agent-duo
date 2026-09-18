@@ -80,8 +80,14 @@ for branch behavior, flags and resume.
    Preserve the exact line-2 marker and literal work text; do not perform
    recursive substitution in user text. Do not mix template/controller versions.
 4. Save planner.resolved.txt and reviewer.resolved.txt in the run directory and
-   present the two prompts labeled by role and model. Both sessions start by reading
-   controller status, so already-published work remains discoverable.
+   present the two prompts labeled by role and model. Current Codex and Claude Code
+   both use `/goal`, with a 4,000-character objective limit. Give each a short goal
+   that names its saved instructions and requires controller completion with the
+   published verdict URL, or the explicitly requested planning-only deliverable.
+   Require reading the file in full; do not paste the full protocol into `/goal`
+   or use `/loop`, which schedules repetition in Claude Code. For other clients,
+   use their supported continued-task mechanism. Both roles begin with controller
+   status, so already-published work remains discoverable.
 5. When asked to launch, carry out the available authorized launch steps rather
    than merely printing prompts. When asked only for prompts, stop after supplying
    them with the initialization command and concrete paths.

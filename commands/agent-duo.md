@@ -32,8 +32,8 @@ through implementation, published PR verdict and finalization.
    Incompatible legacy resume snapshots require a new run with imported and
    revalidated artifacts; never rewrite old evidence to bypass version/hash checks.
    On success, report the run directory it returns and finish this command.
-   The launcher queues the resolved planner prompt in the selected terminal;
-   allow that prompt to drive the run. Do not start a second planner loop or
+   The launcher queues a short `/goal` referencing the saved planner instructions;
+   allow that goal to drive the run. Do not start a second planner goal or
    wait for the invoking planner terminal to become idle inside this command.
 
 The complete role protocols live in `skill/assets/` in a checkout and `assets/`

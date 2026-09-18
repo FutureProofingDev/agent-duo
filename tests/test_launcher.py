@@ -151,6 +151,113 @@ class LauncherTests(unittest.TestCase):
         first_send = next(i for i, call in enumerate(calls) if call[:2] == ['terminal', 'send'])
         self.assertFalse(any(call[:2] == ['terminal', 'wait'] for call in calls[first_send:]))
 
+    def test_agent_bootstrap_targets_the_assigned_role_in_both_transports(self):
+        shutil.copytree(REPO / 'skill/assets', self.home / 'skill/assets')
+        assignments = (
+            ('default', (), {'term_claude': 'planner', 'term_codex': 'reviewer'}),
+            ('swapped', ('--planner', 'codex', '--reviewer', 'claude'),
+             {'term_codex': 'planner', 'term_claude': 'reviewer'}),
+        )
+        for mode in ('file', 'orchestration'):
+            for name, flags, roles in assignments:
+                with self.subTest(mode=mode, assignment=name):
+                    run_id = mode + '-' + name
+                    self.log.unlink(missing_ok=True)
+                    result = self.run_duo('--task', 'Add the requested feature.', '--run-id', run_id,
+                                          '--mode', mode, '--no-reset', *flags)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(len(self.sends()), 2)
+                    for call in self.sends():
+                        handle = call[call.index('--terminal') + 1]
+                        text = call[call.index('--text') + 1]
+                        role = roles[handle]
+                        with self.subTest(role=role):
+                            self.assertEqual(text.split(None, 1)[0], '/goal')
+                            expected_path = f'docs/agent-duo/runs/{run_id}/{role}.resolved.txt'
+                            self.assertTrue(expected_path in text,
+                                            f'{role} bootstrap must reference {expected_path}; got {len(text)} characters')
+                            self.assertLessEqual(len(text), 4000)
+                            self.assertIn('--enter', call)
+                            body = (self.run_path(run_id) / f'{role}.resolved.txt').read_text()
+                            self.assertTrue(body.startswith('You are '), body.splitlines()[0])
+
+    def test_long_brief_is_saved_without_overflowing_the_goal_objective(self):
+        brief = '/loop Preserve this literal first line.\n/goal Preserve this second line.\n' + (
+            'Keep {{USERNAME}}, {{REVIEWER_AGENT}}, café, and every requirement verbatim.\n' * 120
+        ) + '\n'
+        result = self.run_duo('--task', brief, '--run-id', 'test', '--no-reset',
+                              '--planner', 'codex', '--reviewer', 'claude')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_path()
+        self.assertEqual((run / 'brief.md').read_bytes().split(b'---\n', 2)[2], brief.encode())
+        self.assertIn(brief, (run / 'planner.resolved.txt').read_text())
+        self.assertEqual(len(self.sends()), 2)
+        for call in self.sends():
+            handle = call[call.index('--terminal') + 1]
+            role = 'planner' if handle == 'term_codex' else 'reviewer'
+            text = call[call.index('--text') + 1]
+            with self.subTest(role=role):
+                self.assertLessEqual(len(text), 4000)
+                expected_path = f'docs/agent-duo/runs/test/{role}.resolved.txt'
+                self.assertTrue(expected_path in text, f'{role} bootstrap must reference {expected_path}')
+                self.assertNotIn('{{USERNAME}}', text)
+                self.assertEqual(text.split(None, 1)[0], '/goal')
+
+    def test_resume_legacy_commands_preserves_snapshot_and_pending_review(self):
+        shutil.copy2(REPO / 'bin/duo-state.py', self.home / 'bin/duo-state.py')
+        for role, wrapper in (('planner', '/loop'), ('reviewer', '/goal')):
+            path = self.home / f'assets/{role}.md'
+            lines = path.read_text().splitlines(keepends=True)
+            lines[0] = f'{wrapper} You are the {role.upper()}.\n'
+            path.write_text(''.join(lines) + '\n/loop keep this literal example\n/goal keep this example too\n')
+        brief = '/loop {{USERNAME}} is literal user text.\n/goal Keep this line too.\n\n'
+        result = self.run_duo('--task', brief, '--run-id', 'test', '--mode', 'file', '--no-reset',
+                              '--planner', 'codex', '--reviewer', 'claude')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_path()
+        original_brief = (run / 'brief.md').read_bytes()
+        snapshot = json.loads((run / 'launcher.json').read_text())
+        (run / 'spec-v1.md').write_text('---\nrun_id: test\ntype: spec\nround: 1\n---\nA testable specification.\n')
+
+        def state_command(action, *args):
+            response = subprocess.run([sys.executable, str(self.home / 'bin/duo-state.py'), action,
+                                       '--run-dir', str(run), *args], cwd=self.wt,
+                                      text=True, capture_output=True)
+            self.assertEqual(response.returncode, 0, response.stderr)
+            return json.loads(response.stdout)
+
+        pending = state_command('request', '--source', 'spec-v1.md')['pending']
+        for role in ('planner', 'reviewer'):
+            (self.home / f'assets/{role}.md').write_text('New installation must not replace saved instructions.\n')
+        self.data['terms'] = [self.term('term_fresh_codex', 'codex'), self.term('term_fresh_claude', 'claude')]
+        for attempt in range(2):
+            with self.subTest(resume=attempt + 1):
+                self.log.unlink()
+                result = self.run_duo('--resume', '--run-id', 'test')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                saved = json.loads((run / 'launcher.json').read_text())
+                self.assertEqual(saved['templates'], snapshot['templates'])
+                self.assertEqual(saved['template_sha256'], snapshot['template_sha256'])
+                self.assertEqual((run / 'brief.md').read_bytes(), original_brief)
+                state = state_command('status')
+                self.assertEqual(state['phase'], 'spec')
+                self.assertEqual(state['pending'], pending)
+                self.assertEqual(state['reviewer'], 'term_fresh_claude')
+                self.assertIn(brief, (run / 'planner.resolved.txt').read_text())
+                for role in ('planner', 'reviewer'):
+                    body = (run / f'{role}.resolved.txt').read_text()
+                    self.assertTrue(body.startswith(f'You are the {role.upper()}.'), body.splitlines()[0])
+                    self.assertIn('\n/loop keep this literal example\n/goal keep this example too\n', body)
+                self.assertEqual(len(self.sends()), 2)
+                for call in self.sends():
+                    handle = call[call.index('--terminal') + 1]
+                    role = 'planner' if handle == 'term_fresh_codex' else 'reviewer'
+                    text = call[call.index('--text') + 1]
+                    self.assertLessEqual(len(text), 4000)
+                    expected_path = f'docs/agent-duo/runs/test/{role}.resolved.txt'
+                    self.assertTrue(expected_path in text, f'{role} bootstrap must reference {expected_path}')
+                    self.assertEqual(text.split(None, 1)[0], '/goal')
+
     def test_ambiguous_agents_require_explicit_selection(self):
         self.data['terms'].append(self.term('term_other_codex', 'codex'))
         self.assert_rejected_without_run(self.run_duo('--task', 'Feature', '--run-id', 'test', '--no-reset'))

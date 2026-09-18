@@ -168,10 +168,28 @@ def base_commit(wt, explicit):
 
 
 def render(originals, values):
-    # Match only the original templates. Inserted values are never reparsed.
-    return {role: TOKEN.sub(lambda match: values[match.group(1)],
-                           re.sub(r'<!--.*?-->', '', source, flags=re.S))
-            for role, source in originals.items()}
+    prompts = {}
+    for role, source in originals.items():
+        # Old compatible snapshots contain role-bound CLI commands. Strip only
+        # that first prefix, without changing the snapshot or literal brief.
+        body = re.sub(r'\A/(?:loop|goal)[ \t]+', '', source, count=1)
+        body = re.sub(r'<!--.*?-->', '', body, flags=re.S)
+        prompts[role] = TOKEN.sub(lambda match: values[match.group(1)], body)
+    return prompts
+
+
+def goal_prompt(role, run_id):
+    # Both supported clients accept /goal with at most 4,000 characters. The
+    # validated terminal shares this worktree. Anchor the bounded relative path
+    # at its Git root, including when a reused session starts in a subdirectory.
+    instructions = RUNS_ROOT / run_id / f'{role}.resolved.txt'
+    return (f'/goal Complete Agent Duo run {run_id} as its {role}. '
+            f'From this worktree\'s Git root, first read "{instructions.as_posix()}" '
+            'in full and follow those instructions. '
+            'End-to-end success requires controller status completed with a recorded '
+            'published verdict URL; if the brief explicitly requests planning only, '
+            'finish only that scoped deliverable. If a human decision or permission '
+            'is required, report the blocker and stop without claiming completion.')
 
 
 def save_json(path, value):
@@ -361,8 +379,8 @@ def main():
         # Reused planner can be executing /agent-duo itself: queue its prompt.
         # Durable state queues reviews while the reviewer starts. Its worker loop
         # waits for the planner, so waiting for reviewer idle here would deadlock.
-        orca('terminal', 'send', '--terminal', rev, '--text', prompts['reviewer'], '--enter')
-        orca('terminal', 'send', '--terminal', pln, '--text', prompts['planner'], '--enter')
+        orca('terminal', 'send', '--terminal', rev, '--text', goal_prompt('reviewer', args.run_id), '--enter')
+        orca('terminal', 'send', '--terminal', pln, '--text', goal_prompt('planner', args.run_id), '--enter')
     finally:
         if stage is not None:
             shutil.rmtree(stage)

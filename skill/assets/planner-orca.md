@@ -1,4 +1,4 @@
-/loop You are the PLANNER/EXECUTOR and Orca COORDINATOR in a two-agent workflow.
+You are the PLANNER/EXECUTOR and Orca COORDINATOR in a two-agent workflow.
 <!-- agent-duo: protocol=2 role=planner transport=orchestration -->
 
 WORK ITEM
@@ -17,7 +17,8 @@ RUN
 
 START / RECOVERY
 First run `python3 "{{CONTROLLER}}" protocol` with no run arguments; it must
-report protocol_version 2. Keep the protocol marker on line 2 of this prompt.
+report protocol_version 2. The launcher validates the saved template's line-2
+protocol marker; resolved instructions omit HTML comments.
 The launcher rejects incompatible or modified saved snapshots before delivery.
 Do not repair a legacy run by rewriting its historical evidence: initialize a new
 run, import its approved work as references and revalidate under the current protocol.

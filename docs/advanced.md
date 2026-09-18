@@ -93,6 +93,13 @@ Default roles are planner Claude and reviewer Codex; switch them with
 launcher still requires Orca in file mode** to find terminals and deliver prompts.
 For two sessions outside Orca, use [the manual setup](#running-without-orca).
 
+Both roles start with a short `/goal` that points to their saved instructions.
+Current [Codex](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and
+[Claude Code](https://code.claude.com/docs/en/goal) support this command and limit
+the objective to 4,000 characters. The full protocol and literal brief stay in
+files, so long tasks do not overflow the command. Claude's `/loop` schedules
+repetition; it is not the startup command for this workflow.
+
 A new run normally gets branch `duo/<run_id>` from the resolved default base
 (origin's configured remote HEAD, otherwise current HEAD), or a base explicitly supplied with `--base REF`. No develop
 branch is assumed. `--new-worktree` creates a separate Orca worktree and retains
@@ -133,6 +140,9 @@ Resume also checks saved protocol markers and hashes. Incompatible legacy snapsh
 are rejected: create a new run, import the old approved artifacts as references and
 revalidate them. Preserve the original evidence instead of rewriting it to appear
 current.
+Compatible protocol-2 snapshots containing a leading `/loop` or `/goal` do not
+need a new run: resume removes that prefix only from the regenerated instructions
+and sends a short `/goal`, preserving original snapshots and hashes.
 
 Manual runs do not have the launcher's `launcher.json`. For those runs, use
 controller `status` and, when necessary, `resume --reason ...`, then give the saved
@@ -175,9 +185,13 @@ use matching protocol-2 templates and controller. Save the resolved prompts besi
 run state and give each to its assigned session. Both begin by reading `status`,
 so correctness does not depend on which session starts first. Installed templates
 are under `$DUO_HOME/assets/`; their controller is
-`$DUO_HOME/assets/duo-state.py`. The leading `/loop` and `/goal` are session-specific
-wrappers; use your agent's equivalent continued-task mechanism if it does not
-support those commands, while retaining the role instructions and protocol marker.
+`$DUO_HOME/assets/duo-state.py`. The templates contain role instructions without
+a slash-command prefix. For current Codex and Claude Code, submit a short `/goal`
+that asks the agent to read its saved instructions in full and complete the run
+with controller status completed and a published verdict URL, or only the scoped
+deliverable if the brief explicitly requests planning only. Do not paste the full
+protocol into the 4,000-character goal field. For another client, use its supported
+continued-task mechanism while retaining the role instructions and protocol marker.
 
 The reviewer atomically publishes a review and calls `accept`. The planner reads
 the controller's new phase, implements corrections and requests the next round.

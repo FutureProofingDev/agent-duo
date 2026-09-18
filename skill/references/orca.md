@@ -53,7 +53,10 @@ before delivery. `duo-state.py protocol` must report protocol_version 2; all fou
 canonical templates keep their exact protocol/role/transport marker on line 2.
 Required template tokens and saved hashes are validated to reject mixed or modified
 bundles. The launcher initializes the controller, writes the literal brief if
-needed, renders canonical templates and sends them to validated agents. Resolved prompts and launcher metadata stay with
+needed, renders canonical templates and sends a short `/goal` to each validated
+agent, referencing its saved instructions in the shared worktree. Current Codex
+and Claude Code both support `/goal`; keeping the full protocol in a file avoids
+their 4,000-character objective limit. `/loop` is not used for startup. Resolved prompts and launcher metadata stay with
 the run, alongside controller state and separate agent logs. User text is data:
 braces and line breaks must not be interpreted as template instructions.
 
@@ -69,6 +72,9 @@ snapshot cannot resume: initialize a new run, import the approved artifacts as
 references and revalidate them under the current protocol. Preserve the original
 evidence rather than rewriting its provenance. For a compatible run, recreate
 runtime tasks for pending controller requests; do not restart at spec-v1.
+Compatible protocol-2 snapshots that start with `/loop` or `/goal` can resume:
+the renderer removes only that leading wrapper from the resolved instructions
+and sends the short `/goal`. Saved original templates and hashes stay unchanged.
 
 `log-planner.md` and `log-reviewer.md` are agent notes. Controller state and gate
 records are the source for accepted transitions. No log prose or magic PR comment

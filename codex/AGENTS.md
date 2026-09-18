@@ -20,7 +20,8 @@ Continue through implementation after plan approval unless the user explicitly
 requested planning only; "plan" alone is not a stopping instruction.
 
 - Require protocol 2 from `python3 /absolute/path/duo-state.py protocol` and the
-  matching line-2 role/transport marker in the resolved prompt. The launcher checks
+  matching line-2 role/transport marker in the saved template. Resolved instructions
+  omit HTML comments. The launcher checks
   template tokens and saved hashes. Legacy/incompatible runs need a new run with
   imported, revalidated evidence; preserve the original historical records.
 - Start with controller `status`, including after restarts. Process pending work

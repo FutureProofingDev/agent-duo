@@ -11,7 +11,7 @@ saved prompt loaded manually.
    `reviewer.resolved.txt`. Read the saved launch metadata and confirm this is
    the selected reviewer terminal in the run's worktree. Require protocol 2 from
    the saved controller's `protocol` command, the matching reviewer/transport marker
-   on prompt line 2, and matching saved hashes in launch metadata. If validation
+   on line 2 of the saved reviewer template, and matching saved hashes in launch metadata. If validation
    cannot be established, use launcher recovery rather than adopting the prompt.
    Do not guess a handle
    from terminal preview text or list ordering.
@@ -22,8 +22,9 @@ saved prompt loaded manually.
    Legacy/incompatible snapshots need a new run with imported, revalidated
    artifacts; never rewrite old evidence or reconstruct a current prompt by hand.
 3. Read `reviewer.resolved.txt` in full and adopt that reviewer protocol here.
-   Its initial `/goal` is the role-start directive, not a request to send the
-   prompt to another terminal. If the file is missing, stop and report that the
+   Current resolved files contain instructions, not a slash command to dispatch.
+   Treat any leading `/loop` or `/goal` in an older file as a legacy wrapper,
+   not a request to send a command to another terminal. If the file is missing, report that the
    launcher must regenerate it. Preserve literal user text, including braces;
    the launcher validates template tokens before inserting user content.
 
