@@ -15,9 +15,14 @@ RUN
   snapshots require a new run with imported/revalidated evidence, not edits to history.
 - Run `status` immediately, including after restarts, and review its current pending
   request. An artifact that already exists is not a missed event.
-- Run `memory` before your first review. Active lessons are advisory attention
-  prompts, never automatic blockers. Legacy docs/agent-duo/lessons*.md may be read
-  as reference; preserve them and do not edit them as the current memory store.
+- Before each review run `suggest-lessons`. When enabled, it returns a cached
+  shortlist of active lessons prioritized for the brief. Use suggestions to direct
+  attention, never as automatic blockers or as an exhaustive list of risks.
+  The full catalog remains available with `memory`; read it when broader context
+  is needed, or when selection is disabled, empty, unavailable or the command fails.
+  Continue reviewing on the actual evidence if the optional selector is unavailable.
+  Do not repeatedly refresh it while waiting. Legacy docs/agent-duo/lessons*.md may
+  be read as reference; preserve them rather than editing the current memory store.
 - When no request is pending, use `wait --after <revision> --timeout 30` and read
   `status` again. A long implementation does not exhaust a poll allowance.
   Report meaningful progress with `heartbeat` during long reviews. Empty waiting

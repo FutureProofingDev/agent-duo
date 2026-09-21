@@ -55,6 +55,16 @@ continues after plan approval unless you explicitly ask it to stop at planning.
 The final pull request stays available for your decision; Agent Duo does not
 merge or deploy it automatically.
 
+## Optional lesson suggestions
+
+Agent Duo can use Jev through classifier.dev to help the reviewer prioritize
+lessons learned in earlier runs. Ask your agent to **enable Jev lesson suggestions
+for this project**. Enabling sends the task brief and active lesson patterns to
+that external service. The full local memory remains available, and reviews keep
+working when the service is unavailable. No API key is needed.
+
+See [how suggestions work](skill/references/learning.md#optional-jev-lesson-suggestions).
+
 ## Update
 
 Ask your agent:

@@ -122,6 +122,11 @@ assets or duplicate the launcher logic in a slash-command body.
   idempotent SHA-specific comment, not native self-approval or magic approval text.
   New protocol-2 runs finish only when status reports completed with a recorded
   publication URL; include that link in the final summary.
+- Reviewer uses `suggest-lessons` before each review for an optional, cached Jev
+  shortlist. This needs explicit Git configuration authorizing external processing
+  of the brief and active lesson patterns. Selection is advisory; disabled or
+  unavailable selection uses local `memory` and never blocks the run. See
+  [learning and activation](references/learning.md#optional-jev-lesson-suggestions).
 
 ## Learning and limits
 

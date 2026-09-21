@@ -29,7 +29,7 @@ def fail(message):
     raise SystemExit(message)
 
 for relative in (
-    "LICENSE", "skill/SKILL.md", "bin/duo.sh", "bin/duo-state.py",
+    "LICENSE", "skill/SKILL.md", "bin/duo.sh", "bin/duo-state.py", "bin/duo_lessons.py",
     "commands/agent-duo.md", "commands/agent-duo-review.md",
 ):
     if not (root / relative).is_file():
@@ -76,7 +76,7 @@ for field in ("name", "description"):
         fail("SKILL.md needs a " + field + ": field")
 
 packaged = {path.relative_to(skill).as_posix() for path in skill.rglob("*") if path.is_file()}
-packaged.update(("assets/duo.sh", "assets/duo-state.py"))
+packaged.update(("assets/duo.sh", "assets/duo-state.py", "assets/duo_lessons.py"))
 for document in skill.rglob("*.md"):
     text = document.read_text()
     references = set()
@@ -105,6 +105,7 @@ cp -r "$ROOT/skill" "$ROOT/dist/agent-duo"
 install -m 644 "$ROOT/LICENSE" "$ROOT/dist/agent-duo/LICENSE"
 install -m 755 "$ROOT/bin/duo.sh" "$ROOT/dist/agent-duo/assets/duo.sh"
 install -m 755 "$ROOT/bin/duo-state.py" "$ROOT/dist/agent-duo/assets/duo-state.py"
+install -m 644 "$ROOT/bin/duo_lessons.py" "$ROOT/dist/agent-duo/assets/duo_lessons.py"
 (cd "$ROOT/dist" && zip -qr agent-duo.skill agent-duo)
 
 # --- Orca slash commands (optional, Claude Code + Codex) ---

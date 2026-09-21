@@ -55,7 +55,10 @@ transport delivery is uncertain; do not create a new content round for delivery.
 Style/naming/optional improvements remain non-blocking. Later reviews assess both
 the changed content and assumptions affected by it, then verify previous blockers.
 
-The reviewer reads controller `memory` as advisory context and publishes validated,
+The reviewer runs `suggest-lessons` before each review for an optional cached
+shortlist, with full `memory` available for broader context and when selection is
+disabled or unavailable. Suggestions never approve or reject artifacts.
+The reviewer publishes validated,
 generalized learning proposals before its final PR acceptance. The planner invokes
 `publish-review --repo OWNER/NAME` after acceptance, then `finalize`. Publication
 requires authorized gh CLI access, checks the remote HEAD, posts the accepted

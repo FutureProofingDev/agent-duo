@@ -240,6 +240,14 @@ files as reference. Local memory is not included in the code PR; cross-machine
 sharing of the ref is an explicit operation. See
 [the learning reference](../skill/references/learning.md).
 
+The reviewer can prioritize active lessons with `suggest-lessons`. This optional
+Jev integration is off until the user enables `agentduo.lessonSelector=classifier`
+in Git configuration, authorizing transmission of the brief and active lesson
+patterns/scopes to classifier.dev. It caches suggestions in the run folder and
+continues with local memory if the service is unavailable. It does not change
+controller decisions or filter the stored lessons. Activation, data flow and
+recovery are in [the learning reference](../skill/references/learning.md#optional-jev-lesson-suggestions).
+
 ## Optional command wrappers
 
 The [skill installation](../INSTALL.md) is sufficient. If you also use legacy slash-command
@@ -265,6 +273,7 @@ skill/references/   protocol, transport, launcher and learning documentation
 skill/SKILL.md      skill entrypoint
 bin/duo.sh          validated Orca launcher and literal renderer
 bin/duo-state.py    durable standard-library controller
+bin/duo_lessons.py  optional advisory Jev selection, outside controller transitions
 commands/          optional slash-command sources
 codex/AGENTS.md     guidance for Codex while participating in a run
 build*.sh          package the skill and command artifacts

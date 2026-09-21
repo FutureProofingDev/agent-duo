@@ -52,6 +52,7 @@ part of the code PR automatically. Preserve the run directory for recovery.
 | Review | `cr-` plus the source filename, e.g. `cr-spec-v1.md` | reviewer |
 | Human decision context | `escalation.md` | planner |
 | Learning proposals | `lessons-proposals.json` | reviewer |
+| Optional advisory selection cache | `lesson-suggestions.json` | `suggest-lessons` command |
 | Agent logs | `log-planner.md`, `log-reviewer.md` | respective agent |
 
 Create a temporary file in the run directory, finish writing it, then atomically
@@ -125,6 +126,7 @@ All other subcommands take `--run-dir <absolute run directory>`:
 | `publish-review --repo OWNER/NAME` | Verify the accepted PR's remote HEAD, publish its verdict comment idempotently and record the URL |
 | `finalize [--lessons PATH.json]` | Require the recorded verdict publication, persist the completed-run ledger and lessons, then complete |
 | `memory` | Read JSON `{runs, lessons}` from the local learning ref |
+| `suggest-lessons [--refresh]` | Return optional cached Jev suggestions; no protocol transition or memory mutation |
 
 Example:
 

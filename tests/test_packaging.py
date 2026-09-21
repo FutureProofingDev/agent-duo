@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -30,6 +31,8 @@ class PackagingTests(unittest.TestCase):
             "print('{\"protocol_version\": 2}')\n"
         )
         self.controller.chmod(0o755)
+        self.lessons = self.root / "bin/duo_lessons.py"
+        self.lessons.chmod(0o644)
         self.skill = self.root / "skill/SKILL.md"
         self.skill.write_text(
             "---\nname: agent-duo\ndescription: Package fixture\n---\n"
@@ -74,6 +77,41 @@ class PackagingTests(unittest.TestCase):
                     self.assertTrue(archive.getinfo(member).external_attr >> 16 & stat.S_IXUSR)
                     installed = self.root / "dist" / member
                     self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
+
+    def test_installation_includes_importable_lesson_selector(self):
+        self.assert_builds()
+        extracted = Path(self.temp.name) / "extracted installation"
+        member = "agent-duo/assets/duo_lessons.py"
+        with zipfile.ZipFile(self.root / "dist/agent-duo.skill") as archive:
+            archive.extractall(extracted)
+            assets = extracted / "agent-duo/assets"
+            result = subprocess.run(
+                [
+                    sys.executable, "-I", "-B", "-c",
+                    "import sys; sys.path.insert(0, sys.argv[1]); "
+                    "import duo_lessons; print(duo_lessons.__file__)",
+                    str(assets),
+                ],
+                cwd=self.temp.name, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(Path(result.stdout.strip()), assets / "duo_lessons.py")
+            self.assertEqual(archive.read(member), self.lessons.read_bytes())
+            self.assertFalse(archive.getinfo(member).external_attr >> 16 & 0o111)
+        installed = self.root / "dist" / member
+        self.assertEqual(installed.read_bytes(), self.lessons.read_bytes())
+        self.assertFalse(installed.stat().st_mode & 0o111)
+
+    def test_build_accepts_references_to_packaged_lesson_selector(self):
+        self.skill.write_text(
+            self.skill.read_text()
+            + "\nRead `assets/duo_lessons.py` and [selector](assets/duo_lessons.py).\n"
+        )
+        self.assert_builds()
+
+    def test_missing_lesson_selector_preserves_previous_distribution(self):
+        self.lessons.unlink()
+        self.assert_rejected_preserving_previous_distribution("bin/duo_lessons.py")
 
     def test_canonical_prompt_edits_reach_the_installation(self):
         for role in ("planner", "reviewer"):

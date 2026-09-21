@@ -65,15 +65,20 @@ From the resolved clone, run:
 ./build.sh
 git rev-parse HEAD
 python3 dist/agent-duo/assets/duo-state.py protocol
+python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import duo_lessons' "$PWD/dist/agent-duo/assets"
 ```
 
 Record the source commit. Require a successful build and protocol output
-`{"protocol_version": 2}` before replacing an installation. The build checks all
-four canonical prompts and packages the executables with them.
+`{"protocol_version": 2}` plus a successful helper import before replacing an
+installation. The build checks all four canonical prompts and packages the
+launcher, controller and lesson-selector module with them.
 
 **Install `dist/agent-duo/` as a complete directory.** Do not install only
 `skill/SKILL.md`, copy raw `skill/`, or use a generic skill-folder installer on
-that source folder: the build adds `assets/duo.sh` and `assets/duo-state.py`.
+that source folder: the build adds `assets/duo.sh`, `assets/duo-state.py` and
+`assets/duo_lessons.py`. Keep all three runtime files together. The first two
+are executable entrypoints; `duo_lessons.py` is a non-executable Python module
+imported by the controller.
 The generated `dist/agent-duo.skill` is a ZIP of the same directory, not a
 separately published release asset.
 
@@ -97,6 +102,7 @@ and retain the same staging, backup and verification procedure.
   duo_bundle="$PWD/dist/agent-duo"
   test -f "$duo_bundle/SKILL.md"
   python3 "$duo_bundle/assets/duo-state.py" protocol
+  python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import duo_lessons' "$duo_bundle/assets"
   mkdir -p "$HOME/.local/share/agent-duo/backups"
   duo_backup="$(mktemp -d "$HOME/.local/share/agent-duo/backups/update.XXXXXX")"
   echo "Backups: $duo_backup"
@@ -110,6 +116,7 @@ and retain the same staging, backup and verification procedure.
     cp -R "$duo_bundle" "$duo_stage/agent-duo"
     chmod +x "$duo_stage/agent-duo/assets/duo.sh" "$duo_stage/agent-duo/assets/duo-state.py"
     python3 "$duo_stage/agent-duo/assets/duo-state.py" protocol
+    python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import duo_lessons' "$duo_stage/agent-duo/assets"
     printf '%s\n' "$duo_target" > "$duo_backup/$duo_index.path"
     if [ -e "$duo_target" ] || [ -L "$duo_target" ]; then
       mv "$duo_target" "$duo_previous"
@@ -136,11 +143,13 @@ which destinations succeeded instead of claiming an all-or-nothing update.
 For each selected installation:
 
 1. Compare its complete file contents to `dist/agent-duo/` from this build. Check
-   that both scripts in `assets/` are executable and that the four canonical
-   prompt files exist.
+   that `assets/duo.sh` and `assets/duo-state.py` are executable, that
+   `assets/duo_lessons.py` is present as a non-executable module, and that the
+   four canonical prompt files exist.
 2. Run its own `python3 /installed/path/assets/duo-state.py protocol`; require
    `{"protocol_version": 2}`. This checks the installed controller, not merely
-   the copy in your source checkout.
+   the copy in your source checkout. Also repeat the isolated helper import from
+   step 2 with the installed `assets/` directory as its final argument.
 3. If `DUO_HOME` is already configured, make it point to the chosen complete
    bundle when updating that configuration is authorized. Otherwise report the
    stale setting. The skill can locate its own assets; a new user does not need

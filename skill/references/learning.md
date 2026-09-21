@@ -27,6 +27,52 @@ and reconcile divergent histories rather than force-pushing over another machine
 Legacy `docs/agent-duo/lessons.md` and `lessons-pending.md` remain reference material;
 do not delete them or silently treat them as the new writable store.
 
+## Optional Jev lesson suggestions
+
+The reviewer calls `suggest-lessons` before each review. Selection is off by
+default. Enable it only when the user authorizes sending the run's **brief and
+active lesson patterns/scopes** to classifier.dev, whose fast tier uses TypeSafe's
+Jev. No code diff, evidence files, confirmation history or GitHub credentials are
+sent. Briefs and generalized lessons can still contain sensitive project details.
+
+From the application repository:
+
+```bash
+git config --local agentduo.lessonSelector classifier
+python3 /absolute/path/duo-state.py suggest-lessons --run-dir /absolute/run/directory
+```
+
+Use `git config --global agentduo.lessonSelector classifier` only for an explicitly
+authorized personal default across repositories. A repository can override that
+default with `git config --local agentduo.lessonSelector off`.
+
+The public, keyless MCP endpoint is `https://classifier.dev/mcp`. The command uses
+`classify_texts`, fast tier, Jev model, and returns at most three suggestions with
+positive-label scores of at least 0.70. Scores are relative model preferences,
+not verified correctness or approval. Only active learned lessons participate;
+an empty repository memory sends no request and does not import synthetic lessons.
+The complete memory remains accessible through `memory` and is never filtered or
+rewritten by selection. The reviewer must still perform the full review rubric.
+
+`lesson-suggestions.json` in the ignored run directory records an input hash,
+timestamp, model, scores and shortlist. Repeated calls and resume reuse the same
+selection while the brief, active catalog and selection rules are unchanged.
+The actual returned model is recorded because the Jev alias can change.
+Use `suggest-lessons --refresh` for an intentional retry or reevaluation; do not
+poll the service during ordinary waiting. Failed selections are cached too.
+
+Disabled, empty or unavailable selection returns a named status and no shortlist;
+the reviewer continues with local memory. HTTP requests have a five-second timeout
+and no automatic retries. Invalid/missing scores, service errors and excessive
+input sizes make the whole selection unavailable, rather than quietly omitting
+unknown lessons. Selection does not hold the controller lock during network I/O,
+change the phase, approve evidence or update the learned-memory ref. Existing
+saved role prompts are preserved during resume; new runs receive this instruction.
+
+The feature requires only the packaged Python standard-library helper
+`assets/duo_lessons.py`; no global MCP registration, Node package or API key is
+needed. See [classifier MCP documentation](https://classifier.dev/mcp-setup).
+
 ## Proposals and finalization
 
 Before submitting the final approved PR review, the reviewer atomically publishes

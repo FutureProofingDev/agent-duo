@@ -572,6 +572,13 @@ class Controller:
             return self.save(state)
 
     def execute(self, args):
+        if args.command == 'suggest-lessons':
+            from duo_lessons import suggest_lessons
+            # Advisory network I/O must not block protocol updates or deadlines.
+            with self.lock():
+                state = self.load()
+                memory = self.memory(state)
+            return suggest_lessons(self.run, state['worktree'], memory, args.refresh)
         if args.command == 'gate':
             return self.gate(args)
         if args.command == 'wait':
@@ -610,7 +617,7 @@ def parser():
     root = argparse.ArgumentParser(description=__doc__)
     commands = root.add_subparsers(dest='command', required=True)
     commands.add_parser('protocol')
-    for name in ('init', 'status', 'request', 'accept', 'gate', 'heartbeat', 'wait', 'resume', 'finalize', 'memory', 'publish-review'):
+    for name in ('init', 'status', 'request', 'accept', 'gate', 'heartbeat', 'wait', 'resume', 'finalize', 'memory', 'suggest-lessons', 'publish-review'):
         command = commands.add_parser(name)
         command.add_argument('--run-dir', required=True)
         if name == 'init':
@@ -634,6 +641,8 @@ def parser():
             command.add_argument('--lessons')
         elif name == 'publish-review':
             command.add_argument('--repo', required=True)
+        elif name == 'suggest-lessons':
+            command.add_argument('--refresh', action='store_true')
     return root
 
 
