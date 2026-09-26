@@ -9,13 +9,14 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 
 MEMORY_REF = 'refs/agent-duo/learning'
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 
 class InvalidRun(Exception):
@@ -34,6 +35,92 @@ def digest(data):
 def manual_checks(body):
     sections = re.findall(r'^## Pending manual checks[ \t]*\n(.*?)(?=^#{1,6}[ \t]|\Z)', body, re.M | re.S)
     require(len(sections) == 1 and sections[0].strip(), 'PR review must explicitly list Pending manual checks or None.')
+
+
+def section(body, heading):
+    sections = re.findall(r'^## ' + re.escape(heading) + r'[ \t]*\n(.*?)(?=^#{1,2}[ \t]|\Z)', body, re.M | re.S)
+    require(len(sections) == 1 and sections[0].strip(), f'exactly one nonempty {heading} section is required')
+    return sections[0].strip()
+
+
+def records(body, heading):
+    match = re.fullmatch(r'```json\s*\n(.*?)\n```', section(body, heading), re.S)
+    require(match is not None, f'{heading} must contain one JSON fenced list')
+    try:
+        values = json.loads(match[1])
+    except ValueError as error:
+        raise InvalidRun(f'{heading} contains invalid JSON') from error
+    require(isinstance(values, list) and all(isinstance(v, dict) for v in values), f'{heading} must be a list of objects')
+    ids = [v.get('id') for v in values]
+    require(all(isinstance(v, str) and v.strip() for v in ids) and len(set(ids)) == len(ids), f'{heading} needs unique nonempty IDs')
+    return values
+
+
+def findings(body, status):
+    values = records(body, 'Findings')
+    for item in values:
+        require(item.get('category') in ('defect', 'uncertainty', 'preference'), 'finding category must be defect, uncertainty or preference')
+        require(type(item.get('blocking')) is bool, 'finding blocking must be a boolean')
+        for key in ('claim', 'criterion', 'evidence', 'check', 'correction'):
+            require(isinstance(item.get(key), str) and item[key].strip(), f'finding needs {key}')
+        require(not (item['category'] == 'preference' and item['blocking']), 'preferences cannot block')
+    blockers = [item for item in values if item['blocking']]
+    require(bool(blockers) == (status == 'changes_requested'), 'verdict must match blocking findings')
+    return values
+
+
+def code_state(repo, run):
+    """Fingerprint Git-visible code, including staged and unstaged content.
+
+    Ignored build/runtime files and untracked run artifacts are outside this
+    boundary. Index entries, file bytes, executable bits and symlinks are inside.
+    Cooperating writers must stop before snapshotting; this is not a filesystem lock.
+    """
+    repo = Path(repo)
+    def raw_git(*args):
+        result = subprocess.run(['git', '-C', str(repo), *args], capture_output=True)
+        require(result.returncode == 0, result.stderr.decode(errors='replace'))
+        return result.stdout
+    index = raw_git('ls-files', '--stage', '-z')
+    tracked = {}
+    for entry in filter(None, index.split(b'\0')):
+        metadata, path = entry.split(b'\t', 1)
+        mode, _, stage = metadata.split()
+        require(stage == b'0', 'worktree has unresolved merge conflicts')
+        tracked[path] = mode
+    # These flags can hide differences from Git's clean-HEAD checks.
+    flags = raw_git('ls-files', '-v', '-z').split(b'\0')
+    require(all(not e or (e[:1] != b'S' and not e[:1].islower()) for e in flags),
+            'clear skip-worktree/assume-unchanged flags before capturing evidence')
+    paths = set(tracked)
+    for path in filter(None, raw_git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0')):
+        if not (repo / os.fsdecode(path)).is_relative_to(run):
+            paths.add(path)
+    manifest = []
+    for name in sorted(paths):
+        path = repo / os.fsdecode(name)
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            value = ['missing']
+        else:
+            if stat.S_ISLNK(mode):
+                value = ['symlink', digest(os.fsencode(os.readlink(path)))]
+            elif tracked.get(name) == b'160000' and path.is_dir():
+                value = ['submodule', code_state(path, run)['state_sha256'] if (path / '.git').exists() else 'uninitialized']
+            elif stat.S_ISREG(mode):
+                content = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        content.update(chunk)
+                value = ['file', bool(mode & 0o111), content.hexdigest()]
+            else:
+                raise InvalidRun(f'unsupported code file type: {path}')
+        manifest.append([os.fsdecode(name), value])
+    result = dict(head_sha=git(repo, 'rev-parse', 'HEAD'), index_sha256=digest(index),
+                  worktree_sha256=digest(json.dumps(manifest, ensure_ascii=True).encode()))
+    result['state_sha256'] = digest(json.dumps(result, sort_keys=True).encode())
+    return result
 
 
 def process_identity(pid):
@@ -115,9 +202,28 @@ class Controller:
 
     def load(self):
         require(self.path.is_file(), 'run is not initialized; use init')
-        return json.loads(self.path.read_text())
+        state = json.loads(self.path.read_text())
+        require(state.get('protocol_version') == PROTOCOL_VERSION,
+                'incompatible run protocol; preserve it and start a new run with revalidated evidence')
+        return self.ownership(state)
+
+    def ownership(self, state):
+        writable = state['phase'] in ('spec', 'plan', 'executing') and not state['pending'] and not state.get('gate_running')
+        state['write_ownership'] = dict(code='planner' if writable else None,
+                                       source='planner' if writable else None,
+                                       review=state['reviewer'] if state['pending'] and state['phase'] != 'escalated' else None,
+                                       state='controller', planner_log='planner', reviewer_log=state['reviewer'])
+        return state
+
+    def snapshot(self, state, args=None):
+        return code_state(state['worktree'], self.run)
+
+    def unchanged_request(self, state, pending):
+        require(self.snapshot(state) == pending['code_state'],
+                'code state changed during handoff; withdraw with a reason and request a new round')
 
     def save(self, state, progress=True):
+        self.ownership(state)
         state['revision'] += 1
         state['updated_at'] = time.time()
         if progress:
@@ -139,7 +245,7 @@ class Controller:
         state = dict(schema_version=1, protocol_version=PROTOCOL_VERSION, run_id=args.run_id, instance_id=digest(os.urandom(32)), worktree=str(repo), reviewer=args.reviewer,
                      gate=args.gate, phase='spec', revision=0, pending=None, approved={}, history=[],
                      rounds=dict(spec=0, plan=0, pr=0), round_limits=dict(spec=3, plan=3, pr=3),
-                     review_errors=0, gate_result=None, started_at=now, budget_started_at=now,
+                     review_errors=0, open_findings=[], withdrawals=[], gate_result=None, started_at=now, budget_started_at=now,
                      last_progress_at=now, updated_at=now, idle_timeout=args.idle_timeout,
                      run_timeout=args.run_timeout)
         return self.save(state)
@@ -178,7 +284,7 @@ class Controller:
     def clean_head(self, state):
         repo = state['worktree']
         require(not git(repo, 'ls-files', '--unmerged'), 'worktree has unresolved merge conflicts')
-        require(not git(repo, 'diff', '--name-only', 'HEAD'), 'commit tracked changes before running the gate')
+        require(not git(repo, 'diff', '--ignore-submodules=none', '--name-only', 'HEAD') and not git(repo, 'diff', '--cached', '--ignore-submodules=none', '--name-only', 'HEAD'), 'commit tracked changes before running the gate')
         untracked = git(repo, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')
         for path in filter(None, untracked):
             require((Path(repo) / path).resolve().is_relative_to(self.run), f'commit or ignore untracked file before gate: {path}')
@@ -188,17 +294,22 @@ class Controller:
         head = self.clean_head(state)
         gate = state.get('gate_result') or {}
         require(gate.get('exit_code') == 0 and gate.get('head_sha') == head and gate.get('command') == state['gate'], 'run the gate successfully on the current HEAD first')
+        require(gate.get('code_state') == self.snapshot(state), 'code state differs from gate evidence; rerun the gate')
         return head
 
     def request(self, state, args):
         self.active(state)
         self.frozen(state)
-        fields, _, source_hash = artifact(self.run, args.source)
+        fields, body, source_hash = artifact(self.run, args.source)
         kind = {'spec': 'spec', 'plan': 'plan', 'pr-request': 'pr'}.get(fields.get('type'))
         require(kind is not None and fields.get('run_id') == state['run_id'], 'source type or run ID does not match')
         require(type(fields.get('round')) is int and fields['round'] > 0, 'source round must be a positive integer')
+        if kind == 'spec':
+            for heading in ('Observable outcome', 'Constraints', 'Pending assumptions', 'Acceptance evidence'):
+                section(body, heading)
         pending = state['pending']
         if pending and pending['source'] == args.source and pending['source_sha256'] == source_hash:
+            self.unchanged_request(state, pending)
             if kind == 'pr':
                 require(pending['head_sha'] == self.valid_gate(state), 'pending review is for an old HEAD; rerun gate and request the next round')
             return state
@@ -209,6 +320,13 @@ class Controller:
         if round > state['round_limits'][kind]:
             self.escalate(state, f'{kind} round budget exhausted')
             raise InvalidRun('round budget exhausted; resume with a human decision')
+        if state['open_findings']:
+            resolutions = records(body, 'Resolutions')
+            require({item['id'] for item in resolutions} == {item['id'] for item in state['open_findings']},
+                    'resolve every previous blocker by ID')
+            for item in resolutions:
+                require(item.get('disposition') in ('fixed', 'disputed') and isinstance(item.get('evidence'), str) and item['evidence'].strip(),
+                        'each resolution needs fixed/disputed disposition and evidence')
         head = None
         if kind == 'pr':
             head = self.valid_gate(state)
@@ -221,11 +339,26 @@ class Controller:
         else:
             expected = f'{kind}-v{round}.md'
         require(args.source == expected, f'source filename must be {expected}')
-        request_id = digest(f'{state["run_id"]}:{kind}:{round}:{source_hash}:{head}'.encode())
-        state['pending'] = dict(source=args.source, source_sha256=source_hash, request_id=request_id, kind=kind, round=round, head_sha=head)
+        snapshot = self.snapshot(state)
+        request_id = digest(f'{state["instance_id"]}:{kind}:{round}:{source_hash}:{snapshot["state_sha256"]}'.encode())
+        state['pending'] = dict(source=args.source, source_sha256=source_hash, request_id=request_id, kind=kind, round=round, head_sha=head, code_state=snapshot)
         state['rounds'][kind] = round
         state['review_errors'] = 0
         state['phase'] = kind
+        return self.save(state)
+
+    def withdraw(self, state, args):
+        self.active(state)
+        require(state['pending'] is not None, 'no pending request to withdraw')
+        require(args.reason.strip(), 'withdrawal requires a reason')
+        pending = state['pending']
+        state['withdrawals'].append(dict(request=pending, reason=args.reason, at=time.time()))
+        state['pending'] = None
+        state['phase'] = 'executing' if pending['kind'] == 'pr' else pending['kind']
+        if pending['kind'] == 'pr':
+            state['gate_result'] = None
+        if state['rounds'][pending['kind']] >= state['round_limits'][pending['kind']]:
+            return self.escalate(state, f'{pending["kind"]} round budget exhausted')
         return self.save(state)
 
     def invalid_delivery(self, state):
@@ -248,14 +381,17 @@ class Controller:
         self.frozen(state)
         pending = state['pending']
         require(pending is not None, 'no pending review request')
+        self.unchanged_request(state, pending)
         try:
             expected = dict(run_id=state['run_id'], type='review', round=pending['round'],
                             source=pending['source'], source_sha256=pending['source_sha256'],
-                            request_id=pending['request_id'], reviewer=state['reviewer'])
+                            request_id=pending['request_id'], reviewer=state['reviewer'],
+                            code_state_sha256=pending['code_state']['state_sha256'])
             require(all(fields.get(key) == value for key, value in expected.items()), 'review run/source/hash/round/request/reviewer does not match the pending request')
             require(fields.get('status') in ('approved', 'changes_requested'), 'review status must be approved or changes_requested')
             sections = re.findall(r'^#{1,6}\s+([1-5])[.)]\s+.+$', body, flags=re.M)
             require(sections == ['1', '2', '3', '4', '5'], 'review must contain exactly five numbered headings in order')
+            review_findings = findings(body, fields['status'])
             _, _, current_hash = artifact(self.run, pending['source'])
             require(current_hash == pending['source_sha256'], 'source changed after review request')
             if pending['kind'] == 'pr':
@@ -267,7 +403,8 @@ class Controller:
             self.invalid_delivery(state)
             raise
         kind = pending['kind']
-        state['history'].append(dict(**pending, review=args.review, review_sha256=review_hash, status=fields['status']))
+        state['open_findings'] = [item for item in review_findings if item['blocking']]
+        state['history'].append(dict(**pending, review=args.review, review_sha256=review_hash, status=fields['status'], findings=review_findings))
         state['pending'] = None
         if fields['status'] == 'approved':
             state['approved'][kind] = pending
@@ -320,12 +457,13 @@ class Controller:
             self.frozen(state)
             require(state['phase'] in ('executing', 'pr', 'finalizing'), 'gate requires an approved plan')
             require(not state.get('gate_running'), 'gate already running; inspect status before retrying')
+            require(state['pending'] is None, 'withdraw the pending PR request with a reason before rerunning the gate')
             head = self.clean_head(state)
+            snapshot = self.snapshot(state)
             # A changed commit starts another PR round, never inherits an approval.
-            if state['phase'] in ('pr', 'finalizing'):
-                previous = state['pending'] or state['approved'].get('pr')
+            if state['phase'] == 'finalizing':
+                previous = state['approved'].get('pr')
                 require(previous and previous['head_sha'] != head, 'current PR review must finish before rerunning the gate')
-                state['pending'] = None
                 state['approved'].pop('pr', None)
                 state['phase'] = 'executing'
             state['gate_result'] = None
@@ -373,11 +511,11 @@ class Controller:
                 require((current.get('gate_running') or {}).get('token') == token, 'gate state changed while command was running')
                 current.pop('gate_running', None)
                 try:
-                    unchanged = self.clean_head(current) == head
+                    unchanged = self.clean_head(current) == head and self.snapshot(current) == snapshot
                     self.frozen(current)
                 except InvalidRun:
                     unchanged = False
-                current['gate_result'] = dict(head_sha=head, command=state['gate'], exit_code=code if unchanged else 125, log=log.name, finished_at=time.time())
+                current['gate_result'] = dict(head_sha=head, code_state=snapshot, command=state['gate'], exit_code=code if unchanged else 125, log=log.name, finished_at=time.time())
                 self.save(current)
         require(current['gate_result']['exit_code'] == 0, f'gate failed (exit {current["gate_result"]["exit_code"]}); see {log}')
         return current
@@ -404,6 +542,7 @@ class Controller:
         head = self.valid_gate(state)
         approved = state['approved'].get('pr')
         require(approved and approved['head_sha'] == head, 'PR must approve the current checked HEAD')
+        self.unchanged_request(state, approved)
         _, source_body, source_hash = artifact(self.run, approved['source'])
         require(source_hash == approved['source_sha256'], 'approved PR request changed')
         url = f'https://github.com/{repo}/pull/{state["pr_number"]}'
@@ -454,8 +593,6 @@ class Controller:
         return self.save(state)
 
     def published(self, state):
-        if state.get('protocol_version', 1) < PROTOCOL_VERSION:
-            return  # Historical protocol-1 runs retain their original contract.
         publication = state.get('publication')
         require(publication, 'publish-review must succeed before finalization')
         approved, review_hash, _, body = self.publication_evidence(state, publication['repo'])
@@ -617,7 +754,7 @@ def parser():
     root = argparse.ArgumentParser(description=__doc__)
     commands = root.add_subparsers(dest='command', required=True)
     commands.add_parser('protocol')
-    for name in ('init', 'status', 'request', 'accept', 'gate', 'heartbeat', 'wait', 'resume', 'finalize', 'memory', 'suggest-lessons', 'publish-review'):
+    for name in ('init', 'status', 'request', 'accept', 'gate', 'heartbeat', 'wait', 'resume', 'finalize', 'memory', 'suggest-lessons', 'publish-review', 'snapshot', 'withdraw'):
         command = commands.add_parser(name)
         command.add_argument('--run-dir', required=True)
         if name == 'init':
@@ -627,6 +764,8 @@ def parser():
             command.add_argument('--run-timeout', type=positive, default=14400)
         elif name == 'request':
             command.add_argument('--source', required=True)
+        elif name == 'withdraw':
+            command.add_argument('--reason', required=True)
         elif name == 'accept':
             command.add_argument('--review', required=True)
         elif name == 'gate':

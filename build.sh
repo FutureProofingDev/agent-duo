@@ -38,7 +38,7 @@ for relative in ("bin/duo.sh", "bin/duo-state.py"):
     if not os.access(root / relative, os.X_OK):
         fail(relative + " must be executable")
 
-protocol_version = 2
+protocol_version = 3
 try:
     controller = subprocess.run(
         [sys.executable, str(root / "bin/duo-state.py"), "protocol"],

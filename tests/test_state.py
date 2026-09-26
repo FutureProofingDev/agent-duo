@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 import github_fixture
+from protocol_fixture import SPEC, records, defect
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'bin' / 'duo-state.py'
 
@@ -51,14 +52,18 @@ class ControllerTests(unittest.TestCase):
 
     def source(self, kind, round=1, **extra):
         name = f'{kind}-v{round}.md' if kind != 'pr-request' else f'prr-123-v{round}.md'
-        return self.artifact(name, dict(run_id='test-run', type=kind, round=round, **extra), 'https://github.com/example/project/pull/123\n' if kind == 'pr-request' else 'content\n')
+        body = 'https://github.com/example/project/pull/123\n' if kind == 'pr-request' else SPEC
+        state = json.loads((self.run / 'state.json').read_text())
+        if state.get('open_findings'):
+            body += records('Resolutions', [dict(id=item['id'], disposition='fixed', evidence='Targeted correction and regression checked') for item in state['open_findings']])
+        return self.artifact(name, dict(run_id='test-run', type=kind, round=round, **extra), body)
 
     def review(self, pending, status='approved', **extra):
-        fields = dict(run_id='test-run', type='review', round=pending['round'], source=pending['source'], source_sha256=pending['source_sha256'], request_id=pending['request_id'], reviewer='reviewer-1', status=status)
+        fields = dict(run_id='test-run', type='review', round=pending['round'], source=pending['source'], source_sha256=pending['source_sha256'], request_id=pending['request_id'], reviewer='reviewer-1', status=status, code_state_sha256=pending.get('code_state', {}).get('state_sha256', 'legacy'))
         if pending.get('head_sha'):
             fields['head_sha'] = pending['head_sha']
         fields.update(extra)
-        return self.artifact('cr-' + pending['source'], fields, ''.join(f'## {n}. Criterion\nEvidence and decision.\n' for n in range(1, 6)) + '\n## Pending manual checks\nVoiceOver pending.\n')
+        return self.artifact('cr-' + pending['source'], fields, ''.join(f'## {n}. Criterion\nEvidence and decision.\n' for n in range(1, 6)) + '\n## Pending manual checks\nVoiceOver pending.\n' + records('Findings', [defect()] if status == 'changes_requested' else []))
 
     def approve(self, source):
         pending = self.cli('request', '--source', source)['pending']

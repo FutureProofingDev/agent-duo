@@ -104,7 +104,7 @@ python3 /absolute/path/duo-state.py publish-review --run-dir /absolute/run/direc
 python3 /absolute/path/duo-state.py finalize --run-dir /absolute/run/directory --lessons /absolute/run/directory/lessons-proposals.json
 ```
 
-New protocol-2 runs require a recorded verdict publication before finalization.
+New protocol-3 runs require a recorded verdict publication before finalization.
 The publication command uses an authorized gh CLI session; storing memory itself
 remains local. The controller validates and persists proposals, records this completed run once,
 and only then marks it completed. A retry is idempotent. Both agents wait for that

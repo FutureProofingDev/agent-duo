@@ -28,7 +28,7 @@ class PackagingTests(unittest.TestCase):
         self.controller.write_text(
             "#!/usr/bin/env python3\nimport sys\n"
             "assert sys.argv[1:] == ['protocol']\n"
-            "print('{\"protocol_version\": 2}')\n"
+            "print('{\"protocol_version\": 3}')\n"
         )
         self.controller.chmod(0o755)
         self.lessons = self.root / "bin/duo_lessons.py"
@@ -192,10 +192,10 @@ class PackagingTests(unittest.TestCase):
     def test_wrong_role_transport_or_duplicate_marker_preserves_previous_distribution(self):
         template = self.root / "skill/assets/planner.md"
         for marker in (
-            "<!-- agent-duo: protocol=2 role=reviewer transport=file -->",
-            "<!-- agent-duo: protocol=2 role=planner transport=orchestration -->",
-            "<!-- agent-duo: protocol=2 role=planner transport=file -->\n"
-            "<!-- agent-duo: protocol=2 role=planner transport=file -->",
+            "<!-- agent-duo: protocol=3 role=reviewer transport=file -->",
+            "<!-- agent-duo: protocol=3 role=planner transport=orchestration -->",
+            "<!-- agent-duo: protocol=3 role=planner transport=file -->\n"
+            "<!-- agent-duo: protocol=3 role=planner transport=file -->",
         ):
             with self.subTest(marker=marker):
                 template.write_text("/loop Planner\n" + marker + "\n{{CONTROLLER}}\n")

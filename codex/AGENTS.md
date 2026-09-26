@@ -19,7 +19,7 @@ completion. Orca messages are optional notifications around that durable state.
 Continue through implementation after plan approval unless the user explicitly
 requested planning only; "plan" alone is not a stopping instruction.
 
-- Require protocol 2 from `python3 /absolute/path/duo-state.py protocol` and the
+- Require protocol 3 from `python3 /absolute/path/duo-state.py protocol` and the
   matching line-2 role/transport marker in the saved template. Resolved instructions
   omit HTML comments. The launcher checks
   template tokens and saved hashes. Legacy/incompatible runs need a new run with
@@ -45,6 +45,19 @@ requested planning only; "plan" alone is not a stopping instruction.
 - Use bounded `wait` calls and `heartbeat` for real progress. Honor controller
   escalation/deadlines; no agent-side poll counter or self-issued human ruling.
 - Keep timestamped notes in your own log-planner.md or log-reviewer.md.
+
+## Decision evidence
+
+Follow the protocol reference for required spec sections (Observable outcome,
+Constraints, Pending assumptions, Acceptance evidence), Findings and Resolutions.
+Read status.write_ownership. Planner alone writes implementation between handoffs;
+neither agent writes code during review/gate. Each review echoes the pending
+code_state.state_sha256 as code_state_sha256 and checks it with snapshot before
+and after inspection. Dirty spec/plan baselines must remain unchanged. Withdraw
+stale handoffs explicitly with a reason and a new round. Separate demonstrated
+defects, relevant uncertainties and non-blocking preferences; evidence and
+acceptance policy determine blockers. Budget exhaustion is escalation with
+unresolved findings, never a successful result.
 
 ## Roles
 

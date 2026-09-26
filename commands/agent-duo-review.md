@@ -9,7 +9,7 @@ saved prompt loaded manually.
 
 1. Require an absolute run directory containing `launcher.json` and
    `reviewer.resolved.txt`. Read the saved launch metadata and confirm this is
-   the selected reviewer terminal in the run's worktree. Require protocol 2 from
+   the selected reviewer terminal in the run's worktree. Require protocol 3 from
    the saved controller's `protocol` command, the matching reviewer/transport marker
    on line 2 of the saved reviewer template, and matching saved hashes in launch metadata. If validation
    cannot be established, use launcher recovery rather than adopting the prompt.

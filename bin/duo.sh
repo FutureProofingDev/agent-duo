@@ -17,7 +17,7 @@ import sys
 import tempfile
 
 SCRIPT = Path(sys.argv[1]).resolve()
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 RUNS_ROOT = Path('docs/agent-duo/runs')
 TOKEN = re.compile(r'\{\{([A-Z_]+)\}\}')
 KEYS = {'RUN_ID', 'RUNS_ROOT', 'GATE_COMMANDS', 'WORK_ITEM_BLOCK',
