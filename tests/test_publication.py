@@ -83,4 +83,4 @@ class PublicationTests(unittest.TestCase):
     def test_protocol_probe_needs_no_repository_or_run(self):
         result = subprocess.run([sys.executable, str(test_state.SCRIPT), 'protocol'], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['protocol_version'], 2)
+        self.assertEqual(json.loads(result.stdout)['protocol_version'], 3)

@@ -49,7 +49,7 @@ then letters, digits, underscores or hyphens. Select work with exactly one of
 ## Startup, artifacts and recovery
 
 The launcher resolves paths and performs protocol and Git/runtime preflight
-before delivery. `duo-state.py protocol` must report protocol_version 2; all four
+before delivery. `duo-state.py protocol` must report protocol_version 3; all four
 canonical templates keep their exact protocol/role/transport marker on line 2.
 Required template tokens and saved hashes are validated to reject mixed or modified
 bundles. The launcher initializes the controller, writes the literal brief if
@@ -72,7 +72,7 @@ snapshot cannot resume: initialize a new run, import the approved artifacts as
 references and revalidate them under the current protocol. Preserve the original
 evidence rather than rewriting its provenance. For a compatible run, recreate
 runtime tasks for pending controller requests; do not restart at spec-v1.
-Compatible protocol-2 snapshots that start with `/loop` or `/goal` can resume:
+Compatible protocol-3 snapshots that start with `/loop` or `/goal` can resume:
 the renderer removes only that leading wrapper from the resolved instructions
 and sends the short `/goal`. Saved original templates and hashes stay unchanged.
 

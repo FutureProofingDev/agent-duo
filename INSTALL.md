@@ -69,7 +69,7 @@ python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import duo_lesson
 ```
 
 Record the source commit. Require a successful build and protocol output
-`{"protocol_version": 2}` plus a successful helper import before replacing an
+`{"protocol_version": 3}` plus a successful helper import before replacing an
 installation. The build checks all four canonical prompts and packages the
 launcher, controller and lesson-selector module with them.
 
@@ -147,7 +147,7 @@ For each selected installation:
    `assets/duo_lessons.py` is present as a non-executable module, and that the
    four canonical prompt files exist.
 2. Run its own `python3 /installed/path/assets/duo-state.py protocol`; require
-   `{"protocol_version": 2}`. This checks the installed controller, not merely
+   `{"protocol_version": 3}`. This checks the installed controller, not merely
    the copy in your source checkout. Also repeat the isolated helper import from
    step 2 with the installed `assets/` directory as its final argument.
 3. If `DUO_HOME` is already configured, make it point to the chosen complete

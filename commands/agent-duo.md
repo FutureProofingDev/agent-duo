@@ -6,7 +6,7 @@ argument-hint: --run-id ID --task "..." --planner-terminal HANDLE --reviewer-ter
 Start the run by invoking the installed agent-duo launcher with `$ARGUMENTS`.
 The launcher owns argument validation, terminal selection, worktree checks,
 protocol/version/token/hash preflight, prompt rendering, controller initialization,
-and startup delivery. Use the complete protocol-2 bundle. Planning-only is a
+and startup delivery. Use the complete protocol-3 bundle. Planning-only is a
 restriction only when explicitly requested; otherwise plan approval continues
 through implementation, published PR verdict and finalization.
 

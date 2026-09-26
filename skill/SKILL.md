@@ -41,7 +41,7 @@ checks that the derived criteria faithfully cover the source without invented sc
 In a checkout use `bin/duo.sh`; in the installed built skill use `assets/duo.sh`.
 Both use the same canonical prompt assets and packaged controller. Locate the
 actual executable before invoking it; do not assume the skill is a repository.
-Install one complete bundle: `duo-state.py protocol` reports protocol_version 2,
+Install one complete bundle: `duo-state.py protocol` reports protocol_version 3,
 and every canonical template keeps its exact line-2 protocol/role/transport marker.
 
 ```bash
@@ -67,7 +67,7 @@ for branch behavior, flags and resume.
 2. Resolve one dedicated worktree and absolute run/controller paths. The controller
    is `bin/duo-state.py` in the checkout or `assets/duo-state.py` in the built skill.
    Run `python3 /absolute/path/duo-state.py protocol` without run arguments and
-   require protocol_version 2. Create the run directory, exclude it from code commits, and initialize
+   require protocol_version 3. Create the run directory, exclude it from code commits, and initialize
    once with `init --run-dir PATH --run-id ID --worktree PATH --gate
    COMMAND --reviewer IDENTITY`. In file mode use a stable identity such as reviewer;
    both templates read it from controller status.
@@ -97,6 +97,16 @@ assets or duplicate the launcher logic in a slash-command body.
 
 ## Invariants
 
+- Specs carry the decision contract: Observable outcome, Constraints, Pending
+  assumptions and Acceptance evidence. See [the schema](references/protocol.md).
+- Handoffs capture HEAD, index and working-file fingerprints including uncommitted
+  code. Review frontmatter echoes code_state_sha256. Honor status.write_ownership:
+  no code writers during review; reviewer never writes implementation.
+- Reviews include typed Findings with evidence/check/correction; preferences cannot
+  block. New rounds include Resolutions for previous blockers. Exhaustion escalates,
+  preserving unresolved work; it never implies approval. Withdraw stale handoffs
+  explicitly with a reason, retaining evidence and consuming the round.
+
 - One run, one worktree shared by both agents. Existing versions are immutable.
 - Spec precedes plan; accepted spec/plan remain frozen. A changed specification
   needs human scoping and a new run.
@@ -120,7 +130,7 @@ assets or duplicate the launcher logic in a slash-command body.
 - Reviewer publishes learning proposals before its final PR acceptance. Planner
   calls `publish-review --repo OWNER/NAME`, then finalize. Publication is an
   idempotent SHA-specific comment, not native self-approval or magic approval text.
-  New protocol-2 runs finish only when status reports completed with a recorded
+  New protocol-3 runs finish only when status reports completed with a recorded
   publication URL; include that link in the final summary.
 - Reviewer uses `suggest-lessons` before each review for an optional, cached Jev
   shortlist. This needs explicit Git configuration authorizing external processing

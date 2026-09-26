@@ -12,6 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 import github_fixture
+from protocol_fixture import SPEC, records
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'bin' / 'duo-state.py'
 MEMORY_REF = 'refs/agent-duo/learning'
@@ -53,16 +54,16 @@ class Run:
         (self.path / name).write_text(text)
 
     def approve(self, source, **fields):
-        self.artifact(source, dict(run_id=self.run_id, **fields), 'https://github.com/example/project/pull/123\n' if fields['type'] == 'pr-request' else 'Reviewable evidence.\n')
+        self.artifact(source, dict(run_id=self.run_id, **fields), 'https://github.com/example/project/pull/123\n' if fields['type'] == 'pr-request' else SPEC)
         pending = self.cli('request', '--source', source)['pending']
         review = dict(run_id=self.run_id, type='review', round=pending['round'],
                       source=source, source_sha256=pending['source_sha256'],
-                      request_id=pending['request_id'], reviewer='reviewer', status='approved')
+                      request_id=pending['request_id'], reviewer='reviewer', status='approved', code_state_sha256=pending['code_state']['state_sha256'])
         if pending.get('head_sha'):
             review['head_sha'] = pending['head_sha']
         name = 'cr-' + source
         self.artifact(name, review, ''.join(f'## {number}. Criterion\nEvidence checked.\n'
-                                          for number in range(1, 6)) + '\n## Pending manual checks\nNone.\n')
+                                          for number in range(1, 6)) + '\n## Pending manual checks\nNone.\n' + records('Findings', []))
         self.cli('accept', '--review', name)
         if pending['kind'] == 'pr':
             self.cli('publish-review', '--repo', 'example/project')

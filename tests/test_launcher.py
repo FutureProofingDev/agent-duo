@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from protocol_fixture import SPEC
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -44,7 +45,7 @@ from pathlib import Path
 a = sys.argv[1:]
 def arg(n): return a[a.index(n) + 1]
 if a == ['protocol']:
-    print(json.dumps({'protocol_version': int(os.environ.get('CONTROLLER_PROTOCOL', '2'))}))
+    print(json.dumps({'protocol_version': int(os.environ.get('CONTROLLER_PROTOCOL', '3'))}))
     sys.exit(0)
 with open(os.environ['CONTROLLER_LOG'], 'a') as f:
     f.write(json.dumps(a) + '\n')
@@ -77,7 +78,7 @@ class LauncherTests(unittest.TestCase):
                 ('reviewer', '{{SOURCE_OF_TRUTH_BLOCK}}\npeer={{PLANNER_HANDLE}}\n'),
             ):
                 (self.home / f'assets/{role}{suffix}.md').write_text(
-                    f'# {role}\n<!-- agent-duo: protocol=2 role={role} transport={mode} -->\n'
+                    f'# {role}\n<!-- agent-duo: protocol=3 role={role} transport={mode} -->\n'
                     'controller={{CONTROLLER}}\n' + body)
         self.bin = self.root / 'mock-bin'
         self.bin.mkdir()
@@ -217,7 +218,7 @@ class LauncherTests(unittest.TestCase):
         run = self.run_path()
         original_brief = (run / 'brief.md').read_bytes()
         snapshot = json.loads((run / 'launcher.json').read_text())
-        (run / 'spec-v1.md').write_text('---\nrun_id: test\ntype: spec\nround: 1\n---\nA testable specification.\n')
+        (run / 'spec-v1.md').write_text('---\nrun_id: test\ntype: spec\nround: 1\n---\n' + SPEC)
 
         def state_command(action, *args):
             response = subprocess.run([sys.executable, str(self.home / 'bin/duo-state.py'), action,
@@ -375,11 +376,11 @@ class LauncherTests(unittest.TestCase):
         original = template.read_text()
         cases = {
             'legacy': '{{WORK_ITEM_BLOCK}}\npeer={{REVIEWER_HANDLE}}\n',
-            'old_protocol': original.replace('protocol=2', 'protocol=1'),
+            'old_protocol': original.replace('protocol=3', 'protocol=1'),
             'wrong_role': original.replace('role=planner', 'role=reviewer'),
             'wrong_transport': original.replace('transport=orchestration', 'transport=file'),
             'missing_controller': original.replace('{{CONTROLLER}}', 'duo-state.py'),
-            'duplicate_marker': original + '<!-- agent-duo: protocol=2 role=planner transport=orchestration -->\n',
+            'duplicate_marker': original + '<!-- agent-duo: protocol=3 role=planner transport=orchestration -->\n',
             'conflicting_marker': original + '<!-- agent-duo: protocol=1 role=reviewer transport=file -->\n',
         }
         for name, source in cases.items():
@@ -451,7 +452,7 @@ class LauncherTests(unittest.TestCase):
         controller = self.home / 'bin/duo-state.py'
         initial_hash = hashlib.sha256(controller.read_bytes()).hexdigest()
         saved = json.loads((run / 'launcher.json').read_text())
-        self.assertEqual(saved.get('protocol_version'), 2)
+        self.assertEqual(saved.get('protocol_version'), 3)
         self.assertEqual(saved['mode'], 'file')
         for role in ('planner', 'reviewer'):
             source = (self.home / f'assets/{role}.md').read_bytes()
@@ -555,7 +556,7 @@ class LauncherTests(unittest.TestCase):
             rendered = (run / f'{role}.resolved.txt').read_text()
             self.assertIn(f'python3 "{controller.resolve()}"', rendered)
             self.assertNotRegex(rendered.replace(brief, ''), r'\{\{[A-Z_]+\}\}')
-        (run / 'spec-v1.md').write_text('---\nrun_id: test\ntype: spec\nround: 1\n---\nA testable specification.\n')
+        (run / 'spec-v1.md').write_text('---\nrun_id: test\ntype: spec\nround: 1\n---\n' + SPEC)
         pending = state_command('request', '--source', 'spec-v1.md')['pending']
         self.data['terms'] = [self.term('term_fresh_codex', 'codex'), self.term('term_fresh_claude', 'claude')]
         result = self.run_duo('--resume', '--run-id', 'test')

@@ -3,10 +3,96 @@
 Two agents produce Markdown evidence. `duo-state.py`, a Python 3 standard-library
 controller, owns the state machine. Both agents and both transports use the same
 controller and one dedicated Git worktree per run. The current contract is
-protocol 2: `python3 /absolute/path/duo-state.py protocol` takes no run arguments
-and returns `{"protocol_version": 2}`. Canonical prompts carry a protocol/role/transport
+protocol 3: `python3 /absolute/path/duo-state.py protocol` takes no run arguments
+and returns `{"protocol_version": 3}`. Canonical prompts carry a protocol/role/transport
 HTML marker on line 2; the launcher validates it, required tokens and saved hashes
 before delivery. Use one coherent installed bundle, never mixed legacy assets.
+
+## Decision contract and evidence boundary
+
+Protocol 3 adds required decision sections, code-state fingerprints and typed
+findings to the existing lifecycle. It intentionally cannot resume protocol 1/2
+runs: keep the old run and its matching bundle as historical evidence, or start a
+new scoped run and revalidate imported references. Never rewrite a version field
+to bypass this boundary. No installed bundle is upgraded by changing this checkout.
+
+A spec must have exactly one nonempty level-two section for each of:
+
+- `## Observable outcome`: measurable behavior with acceptance IDs, such as AC1.
+- `## Constraints`: scope, non-goals and user/environment restrictions.
+- `## Pending assumptions`: unresolved assumptions, owners and resolving checks,
+  or `None.`. Material product decisions require a human ruling.
+- `## Acceptance evidence`: the checks/evidence for each acceptance ID, including
+  which missing checks prevent acceptance and any explicitly optional checks.
+
+The controller validates presence, not the semantic truth of prose. The reviewer
+checks that the contract matches the brief, is testable and states an honest
+policy for uncertainty. Approved spec and plan still freeze their source hashes.
+
+Every handoff now includes `code_state`: `head_sha`, `index_sha256`,
+`worktree_sha256` and combined `state_sha256`. It hashes index entries, tracked
+file bytes/deletions/executable bits/symlink targets, non-ignored untracked files
+and initialized submodule code states. Untracked artifacts inside the run folder
+and ignored files are excluded. Keep run folders ignored and never track them.
+The index hash reflects staged content separately from the working files. Git
+skip-worktree/assume-unchanged flags are rejected because they can hide changes
+from clean-HEAD checks. `snapshot` reports this same fingerprint without a transition.
+
+Spec/plan handoffs may capture dirty code. The pending fingerprint must still
+match on retry and acceptance, and each review must echo `code_state_sha256` in
+frontmatter. Gate results include their own fingerprint and compare before/after
+execution; PR review/publication/finalization retain clean-commit requirements.
+Fingerprinting is not an atomic filesystem snapshot or an authentication boundary.
+Stop all cooperating code writers before capturing or checking it. Changes made
+and reverted between observations cannot be detected; ignored runtime inputs and
+external services need appropriate acceptance checks.
+
+`status.write_ownership` states who may write code, sources, reviews, state and
+separate logs. Only planner owns code/sources between handoffs; neither agent owns
+code while review/gate is pending, after approval awaiting publication, or while
+escalated/completed. Reviewer owns the pending review, its proposals and own log;
+controller owns state/gate records. Ownership is a cooperative contract, not OS
+permissions. Stop delegated writers before handing off.
+
+To retire stale evidence, coordinate stopping its reviewer, then
+`withdraw --reason TEXT`. It records the old request/fingerprint and reason,
+returns ownership to the planner and consumes the round. Use the next source
+version. At the round limit it escalates. It cannot withdraw an accepted review
+or grant approval. If escalated, first record a real human ruling with resume.
+
+## Hypotheses and targeted convergence
+
+The five existing rubric sections remain. Every review additionally contains
+`## Findings` with exactly one JSON fenced list (empty `[]` is valid):
+
+```json
+[{"id":"F1","category":"defect","claim":"Empty input violates AC1","criterion":"AC1","evidence":"src/input.py:12; empty-input regression fails","check":"Run regression; expect no exception","correction":"Handle empty input before indexing","blocking":true}]
+```
+
+All fields shown are required. Categories are `defect` (reproduction/direct code
+proof), `uncertainty` (missing information plus consequence and resolving check),
+and `preference` (optional improvement). IDs are unique within a review and stable
+for continuing issues. Preferences cannot block. An uncertainty may block only
+under the acceptance policy; the reviewer, not a text parser, judges this relevance.
+`changes_requested` requires a blocking finding; `approved` requires none.
+Uncertainty and unavailable manual checks must never be described as passed.
+
+After changes_requested, the next source contains `## Resolutions` with one JSON
+fenced list covering exactly every `open_findings` ID:
+
+```json
+[{"id":"F1","disposition":"fixed","evidence":"src/input.py:12; regression passes"}]
+```
+
+Disposition is `fixed` or `disputed`; both require concrete evidence. The next
+review checks corrections/counterevidence and affected assumptions, preserving IDs
+for unresolved issues. A planner's claim never clears a blocker by itself. Limit
+changes to supported defects/required decisions; preferences never force extra
+rounds. The existing three content rounds, two invalid deliveries and time budgets
+remain authoritative. Exhaustion leaves phase escalated, preserves open_findings
+and history, and cannot publish or finalize an approval. Report missing evidence
+and the human decision needed. Resume records the human ruling and grants the
+existing bounded extension; no agent may invent its own ruling.
 
 ## Authority and lifecycle
 
@@ -90,6 +176,7 @@ type: review
 round: 1
 source: spec-v1.md
 source_sha256: <hash returned by request>
+code_state_sha256: <pending code_state.state_sha256>
 request_id: <request ID returned by request>
 reviewer: <current assigned reviewer>
 status: approved
@@ -114,8 +201,10 @@ All other subcommands take `--run-dir <absolute run directory>`:
 
 | Command | Purpose |
 |---|---|
-| `protocol` | Report `{protocol_version: 2}` without a run directory |
-| `init --run-id ID --worktree PATH --gate COMMAND --reviewer IDENTITY` | Initialize a new protocol-2 run once; the launcher does this |
+| `protocol` | Report `{protocol_version: 3}` without a run directory |
+| `init --run-id ID --worktree PATH --gate COMMAND --reviewer IDENTITY` | Initialize a new protocol-3 run once; the launcher does this |
+| `snapshot` | Read current code-state fingerprint without changing phase |
+| `withdraw --reason TEXT` | Retire a pending handoff with its evidence; consume the round |
 | `status` | JSON state including revision, phase and pending request |
 | `request --source BASENAME` | Validate and register the next immutable source |
 | `accept --review BASENAME` | Validate review identity, content and evidence; advance state |
@@ -162,6 +251,7 @@ a new PR review with an incremented filename/round. Completion requires:
 
 ```
 reviewed SHA = gate SHA = request SHA = current local HEAD
+reviewed code-state = gate code-state = request code-state = current code-state
 ```
 
 After acceptance the planner runs `publish-review --repo OWNER/NAME`. It uses an
@@ -175,7 +265,7 @@ The core controller remains standard-library Python with no GitHub dependency fo
 local operations. Only publication needs `gh` and permission to read the PR and
 write its comment. It does not require native GitHub self-approval. Arbitrary comment
 text cannot grant approval; the recorded publication makes the accepted local
-verdict visible. New protocol-2 runs require that record before `finalize`. Success
+verdict visible. New protocol-3 runs require that record before `finalize`. Success
 is `phase: completed` with the verdict URL included in the final summary. No
 automatic merge is part of the workflow.
 

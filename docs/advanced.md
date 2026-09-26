@@ -18,11 +18,25 @@ brief → spec review → plan review → implementation → gate → PR review 
 
 The agents handle design and review. A small Python controller validates the
 artifacts, keeps recoverable run state, executes the configured checks, and accepts
-PR review only for the current checked commit. Human intervention is required for
+PR review only for the current checked commit and code-state fingerprint. Human intervention is required for
 unresolved decisions or permissions that the environment has not already granted.
 Plan approval continues to implementation by default. Stop at planning only when
 the user explicitly requests that narrower deliverable; the word "plan" alone
 does not turn an end-to-end run into a planning-only session.
+
+## Decision contracts and safe handoffs
+
+Protocol 3 retains the existing spec/plan/gate workflow. Specs explicitly state
+observable outcomes, constraints, pending assumptions and acceptance evidence.
+Every handoff binds its artifact to HEAD, index and working files, including
+uncommitted changes. Status declares write ownership; only the planner edits code,
+and all code writers stop during review. Findings separate demonstrated defects,
+relevant uncertainties and optional preferences. Corrections answer previous
+blocker IDs with evidence; exhausting a budget escalates and never approves.
+
+The [protocol reference](../skill/references/protocol.md) specifies artifact fields,
+fingerprint exclusions, withdrawal and recovery. Protocol 1/2 runs are not silently
+upgraded: preserve their bundle/history or revalidate references in a new run.
 
 ## What it preserves
 
@@ -80,7 +94,7 @@ of `--task` or `--issue`. Run IDs contain 1–64 letters/digits/underscores/hyph
 and start with a letter or digit.
 
 The launcher validates protocol version, template role/transport markers, required
-tokens, worktree and structured agent identities before sending anything. Protocol 2
+tokens, worktree and structured agent identities before sending anything. Protocol 3
 comes from `duo-state.py protocol`; each canonical prompt has its HTML marker on
 line 2. Keep the launcher, controller and templates from one bundle. New runs save
 the original templates, their hashes, controller provenance and resolved prompts
@@ -140,7 +154,7 @@ Resume also checks saved protocol markers and hashes. Incompatible legacy snapsh
 are rejected: create a new run, import the old approved artifacts as references and
 revalidate them. Preserve the original evidence instead of rewriting it to appear
 current.
-Compatible protocol-2 snapshots containing a leading `/loop` or `/goal` do not
+Compatible protocol-3 snapshots containing a leading `/loop` or `/goal` do not
 need a new run: resume removes that prefix only from the regenerated instructions
 and sends a short `/goal`, preserving original snapshots and hashes.
 
@@ -167,7 +181,7 @@ For explicit setup, resolve absolute paths and initialize a new run once:
 cd /absolute/path/to/the-dedicated-worktree
 export DUO_HOME="$HOME/.agents/skills/agent-duo"
 duo_run="$PWD/docs/agent-duo/runs/login-a"
-python3 "$DUO_HOME/assets/duo-state.py" protocol  # requires protocol_version 2
+python3 "$DUO_HOME/assets/duo-state.py" protocol  # requires protocol_version 3
 mkdir -p "$duo_run"
 python3 "$DUO_HOME/assets/duo-state.py" init \
   --run-dir "$duo_run" --run-id login-a --worktree "$PWD" \
@@ -181,7 +195,7 @@ statement verbatim in the run's brief.md. Fill
 with a trailing slash, absolute `CONTROLLER`, actual `GATE_COMMANDS`,
 `WORK_ITEM_BLOCK` and `SOURCE_OF_TRUTH_BLOCK`. Preserve literal work text rather
 than recursively replacing braces inside it. Preserve each line-2 marker and
-use matching protocol-2 templates and controller. Save the resolved prompts beside the
+use matching protocol-3 templates and controller. Save the resolved prompts beside the
 run state and give each to its assigned session. Both begin by reading `status`,
 so correctness does not depend on which session starts first. Installed templates
 are under `$DUO_HOME/assets/`; their controller is
@@ -225,7 +239,7 @@ Publication verifies the live remote HEAD and uses gh to post the accepted revie
 SHA, evidence and pending manual checks as a readable comment. It records the URL
 and is idempotent on retry. It does not attempt native GitHub self-approval, and
 arbitrary comment text cannot grant approval. A publication failure leaves the
-run unfinished. New protocol-2 runs require recorded publication before `finalize`.
+run unfinished. New protocol-3 runs require recorded publication before `finalize`.
 
 Finalization persists the completed-run ledger and reviewer proposals in local Git
 ref `refs/agent-duo/learning`. Only then is the run completed; the final summary
