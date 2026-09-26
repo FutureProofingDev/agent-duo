@@ -45,9 +45,14 @@ outside Orca is not available yet.
 
 ## What you get
 
-- A plan reviewed before implementation starts.
-- A second agent checking the changes and requesting corrections.
-- Your project's checks run against the changes being reviewed.
+- A decision contract defining the outcome, constraints, pending assumptions and
+  evidence needed to accept the work, followed by a reviewed plan.
+- Handoffs tied to the exact code state, including uncommitted changes, with
+  explicit responsibility for who can write during each phase.
+- A second agent separating demonstrated defects, relevant uncertainties and
+  optional preferences, with specific corrections for blocking findings.
+- Your project's checks run against the changes being reviewed. Review rounds
+  are bounded; unresolved findings escalate when limits are reached.
 - A GitHub pull request with the review, evidence and any checks still pending.
 
 You may be asked to resolve a product decision or authorize access. Agent Duo
@@ -75,6 +80,12 @@ using INSTALL.md. Back up the installed version and verify the update.
 ```
 
 Then start a new agent session. Updating the skill preserves existing run history.
+
+This version uses **protocol 3**. Existing protocol 1 or 2 runs need their matching
+older bundle to continue; the new controller will not migrate them automatically.
+Keep the installation backup for those runs, or start a new run and revalidate
+the evidence. See the [protocol reference](skill/references/protocol.md) for the
+evidence boundaries and recovery rules.
 
 ## Want the details?
 
